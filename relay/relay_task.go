@@ -20,7 +20,7 @@ import (
 )
 
 /*
-Task 任务通过平台、Action 区分任务
+Tasks are differentiated by platform and Action
 */
 func RelayTaskSubmit(c *gin.Context, relayMode int) (taskErr *dto.TaskError) {
 	platform := constant.TaskPlatform(c.GetString("platform"))
@@ -31,7 +31,7 @@ func RelayTaskSubmit(c *gin.Context, relayMode int) (taskErr *dto.TaskError) {
 		return service.TaskErrorWrapperLocal(fmt.Errorf("invalid api platform: %s", platform), "invalid_api_platform", http.StatusBadRequest)
 	}
 	adaptor.Init(relayInfo)
-	// get & validate taskRequest 获取并验证文本请求
+	// get & validate taskRequest
 	taskErr = adaptor.ValidateRequestAndSetAction(c, relayInfo)
 	if taskErr != nil {
 		return
@@ -48,7 +48,7 @@ func RelayTaskSubmit(c *gin.Context, relayMode int) (taskErr *dto.TaskError) {
 		}
 	}
 
-	// 预扣
+	// Pre-deduction
 	groupRatio := setting.GetGroupRatio(relayInfo.Group)
 	ratio := modelPrice * groupRatio
 	userQuota, err := model.GetUserQuota(relayInfo.UserId, false)
@@ -79,7 +79,7 @@ func RelayTaskSubmit(c *gin.Context, relayMode int) (taskErr *dto.TaskError) {
 				return
 			}
 			if channel.Status != common.ChannelStatusEnabled {
-				return service.TaskErrorWrapperLocal(errors.New("该任务所属渠道已被禁用"), "task_channel_disable", http.StatusBadRequest)
+				return service.TaskErrorWrapperLocal(errors.New("The channel associated with this task has been disabled"), "task_channel_disable", http.StatusBadRequest)
 			}
 			c.Set("base_url", channel.GetBaseURL())
 			c.Set("channel_id", originTask.ChannelId)
@@ -119,7 +119,7 @@ func RelayTaskSubmit(c *gin.Context, relayMode int) (taskErr *dto.TaskError) {
 			}
 			if quota != 0 {
 				tokenName := c.GetString("token_name")
-				logContent := fmt.Sprintf("模型固定价格 %.2f，分组倍率 %.2f，操作 %s", modelPrice, groupRatio, relayInfo.Action)
+				logContent := fmt.Sprintf("Model fixed price %.2f, group ratio %.2f, operation %s", modelPrice, groupRatio, relayInfo.Action)
 				other := make(map[string]interface{})
 				other["model_price"] = modelPrice
 				other["group_ratio"] = groupRatio

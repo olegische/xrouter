@@ -149,7 +149,7 @@ func ResponsesHelper(c *gin.Context) (openaiErr *dto.OpenAIErrorWithStatusCode) 
 
 		if httpResp.StatusCode != http.StatusOK {
 			openaiErr = service.RelayErrorHandler(httpResp, false)
-			// reset status code 重置状态码
+			// reset status code
 			service.ResetStatusCode(openaiErr, statusCodeMappingStr)
 			return openaiErr
 		}
@@ -157,7 +157,7 @@ func ResponsesHelper(c *gin.Context) (openaiErr *dto.OpenAIErrorWithStatusCode) 
 
 	usage, openaiErr := adaptor.DoResponse(c, httpResp, relayInfo)
 	if openaiErr != nil {
-		// reset status code 重置状态码
+		// reset status code
 		service.ResetStatusCode(openaiErr, statusCodeMappingStr)
 		return openaiErr
 	}

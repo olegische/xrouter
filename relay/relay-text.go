@@ -74,7 +74,7 @@ func TextHelper(c *gin.Context) (openaiErr *dto.OpenAIErrorWithStatusCode) {
 
 	relayInfo := relaycommon.GenRelayInfo(c)
 
-	// get & validate textRequest 获取并验证文本请求
+	// get & validate textRequest
 	textRequest, err := getAndValidateTextRequest(c, relayInfo)
 	if err != nil {
 		common.LogError(c, fmt.Sprintf("getAndValidateTextRequest failed: %s", err.Error()))
@@ -96,14 +96,14 @@ func TextHelper(c *gin.Context) (openaiErr *dto.OpenAIErrorWithStatusCode) {
 
 	textRequest.Model = relayInfo.UpstreamModelName
 
-	// 获取 promptTokens，如果上下文中已经存在，则直接使用
+	// Get promptTokens, if it already exists in the context, use it directly
 	var promptTokens int
 	if value, exists := c.Get("prompt_tokens"); exists {
 		promptTokens = value.(int)
 		relayInfo.PromptTokens = promptTokens
 	} else {
 		promptTokens, err = getPromptTokens(textRequest, relayInfo)
-		// count messages token error 计算promptTokens错误
+		// count messages token error
 		if err != nil {
 			return service.OpenAIErrorWrapper(err, "count_token_messages_failed", http.StatusInternalServerError)
 		}
@@ -115,7 +115,7 @@ func TextHelper(c *gin.Context) (openaiErr *dto.OpenAIErrorWithStatusCode) {
 		return service.OpenAIErrorWrapperLocal(err, "model_price_error", http.StatusInternalServerError)
 	}
 
-	// pre-consume quota 预消耗配额
+	// pre-consume quota
 	preConsumedQuota, userQuota, openaiErr := preConsumeQuota(c, priceData.ShouldPreConsumedQuota, relayInfo)
 	if openaiErr != nil {
 		return openaiErr
@@ -126,16 +126,16 @@ func TextHelper(c *gin.Context) (openaiErr *dto.OpenAIErrorWithStatusCode) {
 		}
 	}()
 	includeUsage := false
-	// 判断用户是否需要返回使用情况
+	// Check if the user needs to return usage information
 	if textRequest.StreamOptions != nil && textRequest.StreamOptions.IncludeUsage {
 		includeUsage = true
 	}
 
-	// 如果不支持StreamOptions，将StreamOptions设置为nil
+	// If StreamOptions is not supported, set StreamOptions to nil
 	if !relayInfo.SupportStreamOptions || !textRequest.Stream {
 		textRequest.StreamOptions = nil
 	} else {
-		// 如果支持StreamOptions，且请求中没有设置StreamOptions，根据配置文件设置StreamOptions
+		// If StreamOptions is supported, and StreamOptions is not set in the request, set StreamOptions according to the configuration file
 		if constant.ForceStreamOption {
 			textRequest.StreamOptions = &dto.StreamOptions{
 				IncludeUsage: true,
@@ -206,7 +206,7 @@ func TextHelper(c *gin.Context) (openaiErr *dto.OpenAIErrorWithStatusCode) {
 		relayInfo.IsStream = relayInfo.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 		if httpResp.StatusCode != http.StatusOK {
 			openaiErr = service.RelayErrorHandler(httpResp, false)
-			// reset status code 重置状态码
+			// reset status code
 			service.ResetStatusCode(openaiErr, statusCodeMappingStr)
 			return openaiErr
 		}
@@ -214,7 +214,7 @@ func TextHelper(c *gin.Context) (openaiErr *dto.OpenAIErrorWithStatusCode) {
 
 	usage, openaiErr := adaptor.DoResponse(c, httpResp, relayInfo)
 	if openaiErr != nil {
-		// reset status code 重置状态码
+		// reset status code
 		service.ResetStatusCode(openaiErr, statusCodeMappingStr)
 		return openaiErr
 	}
@@ -263,7 +263,7 @@ func checkRequestSensitive(textRequest *dto.GeneralOpenAIRequest, info *relaycom
 	return words, err
 }
 
-// 预扣费并返回用户剩余配额
+// Pre-deduct and return remaining user quota
 func preConsumeQuota(c *gin.Context, preConsumedQuota int, relayInfo *relaycommon.RelayInfo) (int, int, *dto.OpenAIErrorWithStatusCode) {
 	userQuota, err := model.GetUserQuota(relayInfo.UserId, false)
 	if err != nil {
@@ -277,12 +277,12 @@ func preConsumeQuota(c *gin.Context, preConsumedQuota int, relayInfo *relaycommo
 	}
 	relayInfo.UserQuota = userQuota
 	if userQuota > 100*preConsumedQuota {
-		// 用户额度充足，判断令牌额度是否充足
+		// User quota is sufficient, check if token quota is sufficient
 		if !relayInfo.TokenUnlimited {
-			// 非无限令牌，判断令牌额度是否充足
+			// Non-unlimited token, check if token quota is sufficient
 			tokenQuota := c.GetInt("token_quota")
 			if tokenQuota > 100*preConsumedQuota {
-				// 令牌额度充足，信任令牌
+				// Token quota is sufficient, trust the token
 				preConsumedQuota = 0
 				common.LogInfo(c, fmt.Sprintf("user %d quota %s and token %d quota %d are enough, trusted and no need to pre-consume", relayInfo.UserId, common.FormatQuota(userQuota), relayInfo.TokenId, tokenQuota))
 			}
@@ -328,7 +328,7 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 			CompletionTokens: 0,
 			TotalTokens:      relayInfo.PromptTokens,
 		}
-		extraContent += "（可能是请求出错）"
+		extraContent += "(possibly a request error)"
 	}
 	useTimeSeconds := time.Now().Unix() - relayInfo.StartTime.Unix()
 	promptTokens := usage.PromptTokens
@@ -360,21 +360,21 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 
 	ratio := dModelRatio.Mul(dGroupRatio)
 
-	// openai web search 工具计费
+	// openai web search tool billing
 	var dWebSearchQuota decimal.Decimal
 	var webSearchPrice float64
 	if relayInfo.ResponsesUsageInfo != nil {
 		if webSearchTool, exists := relayInfo.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolWebSearchPreview]; exists && webSearchTool.CallCount > 0 {
-			// 计算 web search 调用的配额 (配额 = 价格 * 调用次数 / 1000 * 分组倍率)
+			// Calculate web search call quota (quota = price * call count / 1000 * group ratio)
 			webSearchPrice = operation_setting.GetWebSearchPricePerThousand(modelName, webSearchTool.SearchContextSize)
 			dWebSearchQuota = decimal.NewFromFloat(webSearchPrice).
 				Mul(decimal.NewFromInt(int64(webSearchTool.CallCount))).
 				Div(decimal.NewFromInt(1000)).Mul(dGroupRatio).Mul(dQuotaPerUnit)
-			extraContent += fmt.Sprintf("Web Search 调用 %d 次，上下文大小 %s，调用花费 $%s",
+			extraContent += fmt.Sprintf("Web Search called %d times, context size %s, call cost $%s",
 				webSearchTool.CallCount, webSearchTool.SearchContextSize, dWebSearchQuota.String())
 		}
 	}
-	// file search tool 计费
+	// file search tool billing
 	var dFileSearchQuota decimal.Decimal
 	var fileSearchPrice float64
 	if relayInfo.ResponsesUsageInfo != nil {
@@ -383,7 +383,7 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 			dFileSearchQuota = decimal.NewFromFloat(fileSearchPrice).
 				Mul(decimal.NewFromInt(int64(fileSearchTool.CallCount))).
 				Div(decimal.NewFromInt(1000)).Mul(dGroupRatio).Mul(dQuotaPerUnit)
-			extraContent += fmt.Sprintf("File Search 调用 %d 次，调用花费 $%s",
+			extraContent += fmt.Sprintf("File Search called %d times, call cost $%s",
 				fileSearchTool.CallCount, dFileSearchQuota.String())
 		}
 	}
@@ -410,7 +410,7 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 	} else {
 		quotaCalculateDecimal = dModelPrice.Mul(dQuotaPerUnit).Mul(dGroupRatio)
 	}
-	// 添加 responses tools call 调用的配额
+	// Add quota for responses tools call
 	quotaCalculateDecimal = quotaCalculateDecimal.Add(dWebSearchQuota)
 	quotaCalculateDecimal = quotaCalculateDecimal.Add(dFileSearchQuota)
 
@@ -419,9 +419,9 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 
 	var logContent string
 	if !priceData.UsePrice {
-		logContent = fmt.Sprintf("模型倍率 %.2f，补全倍率 %.2f，分组倍率 %.2f", modelRatio, completionRatio, groupRatio)
+		logContent = fmt.Sprintf("Model ratio %.2f, completion ratio %.2f, group ratio %.2f", modelRatio, completionRatio, groupRatio)
 	} else {
-		logContent = fmt.Sprintf("模型价格 %.2f，分组倍率 %.2f", modelPrice, groupRatio)
+		logContent = fmt.Sprintf("Model price %.2f, group ratio %.2f", modelPrice, groupRatio)
 	}
 
 	// record all the consume log even if quota is 0
@@ -429,7 +429,7 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 		// in this case, must be some error happened
 		// we cannot just return, because we may have to return the pre-consumed quota
 		quota = 0
-		logContent += fmt.Sprintf("（可能是上游超时）")
+		logContent += fmt.Sprintf("(possibly upstream timeout)")
 		common.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, "+
 			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, modelName, preConsumedQuota))
 	} else {
@@ -448,11 +448,11 @@ func postConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 	logModel := modelName
 	if strings.HasPrefix(logModel, "gpt-4-gizmo") {
 		logModel = "gpt-4-gizmo-*"
-		logContent += fmt.Sprintf("，模型 %s", modelName)
+		logContent += fmt.Sprintf(", model %s", modelName)
 	}
 	if strings.HasPrefix(logModel, "gpt-4o-gizmo") {
 		logModel = "gpt-4o-gizmo-*"
-		logContent += fmt.Sprintf("，模型 %s", modelName)
+		logContent += fmt.Sprintf(", model %s", modelName)
 	}
 	if extraContent != "" {
 		logContent += ", " + extraContent

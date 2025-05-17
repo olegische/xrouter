@@ -17,7 +17,7 @@ import (
 func WssHelper(c *gin.Context, ws *websocket.Conn) (openaiErr *dto.OpenAIErrorWithStatusCode) {
 	relayInfo := relaycommon.GenRelayInfoWs(c, ws)
 
-	// get & validate textRequest 获取并验证文本请求
+	// get & validate textRequest
 	//realtimeEvent, err := getAndValidateWssRequest(c, ws)
 	//if err != nil {
 	//	common.LogError(c, fmt.Sprintf("getAndValidateWssRequest failed: %s", err.Error()))
@@ -56,7 +56,7 @@ func WssHelper(c *gin.Context, ws *websocket.Conn) (openaiErr *dto.OpenAIErrorWi
 	//}
 
 	//promptTokens, err := getWssPromptTokens(realtimeEvent, relayInfo)
-	//// count messages token error 计算promptTokens错误
+	//// count messages token error
 	//if err != nil {
 	//	return service.OpenAIErrorWrapper(err, "count_token_messages_failed", http.StatusInternalServerError)
 	//}
@@ -74,7 +74,7 @@ func WssHelper(c *gin.Context, ws *websocket.Conn) (openaiErr *dto.OpenAIErrorWi
 		relayInfo.UsePrice = true
 	}
 
-	// pre-consume quota 预消耗配额
+	// pre-consume quota
 	preConsumedQuota, userQuota, openaiErr := preConsumeQuota(c, preConsumedQuota, relayInfo)
 	if openaiErr != nil {
 		return openaiErr
@@ -108,7 +108,7 @@ func WssHelper(c *gin.Context, ws *websocket.Conn) (openaiErr *dto.OpenAIErrorWi
 
 	usage, openaiErr := adaptor.DoResponse(c, nil, relayInfo)
 	if openaiErr != nil {
-		// reset status code 重置状态码
+		// reset status code
 		service.ResetStatusCode(openaiErr, statusCodeMappingStr)
 		return openaiErr
 	}

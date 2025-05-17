@@ -241,7 +241,7 @@ func ImageHelper(c *gin.Context) *dto.OpenAIErrorWithStatusCode {
 		relayInfo.IsStream = relayInfo.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 		if httpResp.StatusCode != http.StatusOK {
 			openaiErr := service.RelayErrorHandler(httpResp, false)
-			// reset status code 重置状态码
+			// reset status code
 			service.ResetStatusCode(openaiErr, statusCodeMappingStr)
 			return openaiErr
 		}
@@ -249,7 +249,7 @@ func ImageHelper(c *gin.Context) *dto.OpenAIErrorWithStatusCode {
 
 	usage, openaiErr := adaptor.DoResponse(c, httpResp, relayInfo)
 	if openaiErr != nil {
-		// reset status code 重置状态码
+		// reset status code
 		service.ResetStatusCode(openaiErr, statusCodeMappingStr)
 		return openaiErr
 	}
@@ -265,7 +265,7 @@ func ImageHelper(c *gin.Context) *dto.OpenAIErrorWithStatusCode {
 		quality = "hd"
 	}
 
-	logContent := fmt.Sprintf("大小 %s, 品质 %s", imageRequest.Size, quality)
+	logContent := fmt.Sprintf("Size %s, Quality %s", imageRequest.Size, quality)
 	postConsumeQuota(c, relayInfo, usage.(*dto.Usage), preConsumedQuota, userQuota, priceData, logContent)
 	return nil
 }

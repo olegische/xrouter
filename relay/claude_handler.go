@@ -36,7 +36,7 @@ func ClaudeHelper(c *gin.Context) (claudeError *dto.ClaudeErrorWithStatusCode) {
 
 	relayInfo := relaycommon.GenRelayInfoClaude(c)
 
-	// get & validate textRequest 获取并验证文本请求
+	// get & validate textRequest
 	textRequest, err := getAndValidateClaudeRequest(c)
 	if err != nil {
 		return service.ClaudeErrorWrapperLocal(err, "invalid_claude_request", http.StatusBadRequest)
@@ -54,7 +54,7 @@ func ClaudeHelper(c *gin.Context) (claudeError *dto.ClaudeErrorWithStatusCode) {
 	textRequest.Model = relayInfo.UpstreamModelName
 
 	promptTokens, err := getClaudePromptTokens(textRequest, relayInfo)
-	// count messages token error 计算promptTokens错误
+	// count messages token error
 	if err != nil {
 		return service.ClaudeErrorWrapperLocal(err, "count_token_messages_failed", http.StatusInternalServerError)
 	}
@@ -64,7 +64,7 @@ func ClaudeHelper(c *gin.Context) (claudeError *dto.ClaudeErrorWithStatusCode) {
 		return service.ClaudeErrorWrapperLocal(err, "model_price_error", http.StatusInternalServerError)
 	}
 
-	// pre-consume quota 预消耗配额
+	// pre-consume quota
 	preConsumedQuota, userQuota, openaiErr := preConsumeQuota(c, priceData.ShouldPreConsumedQuota, relayInfo)
 
 	if openaiErr != nil {
@@ -90,17 +90,17 @@ func ClaudeHelper(c *gin.Context) (claudeError *dto.ClaudeErrorWithStatusCode) {
 	if model_setting.GetClaudeSettings().ThinkingAdapterEnabled &&
 		strings.HasSuffix(textRequest.Model, "-thinking") {
 		if textRequest.Thinking == nil {
-			// 因为BudgetTokens 必须大于1024
+			// Because BudgetTokens must be greater than 1024
 			if textRequest.MaxTokens < 1280 {
 				textRequest.MaxTokens = 1280
 			}
 
-			// BudgetTokens 为 max_tokens 的 80%
+			// BudgetTokens is 80% of max_tokens
 			textRequest.Thinking = &dto.Thinking{
 				Type:         "enabled",
 				BudgetTokens: int(float64(textRequest.MaxTokens) * model_setting.GetClaudeSettings().ThinkingAdapterBudgetTokensPercentage),
 			}
-			// TODO: 临时处理
+			// TODO: Temporary handling
 			// https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking#important-considerations-when-using-extended-thinking
 			textRequest.TopP = 0
 			textRequest.Temperature = common.GetPointer[float64](1.0)
@@ -134,7 +134,7 @@ func ClaudeHelper(c *gin.Context) (claudeError *dto.ClaudeErrorWithStatusCode) {
 		relayInfo.IsStream = relayInfo.IsStream || strings.HasPrefix(httpResp.Header.Get("Content-Type"), "text/event-stream")
 		if httpResp.StatusCode != http.StatusOK {
 			openaiErr = service.RelayErrorHandler(httpResp, false)
-			// reset status code 重置状态码
+			// reset status code
 			service.ResetStatusCode(openaiErr, statusCodeMappingStr)
 			return service.OpenAIErrorToClaudeError(openaiErr)
 		}
@@ -143,7 +143,7 @@ func ClaudeHelper(c *gin.Context) (claudeError *dto.ClaudeErrorWithStatusCode) {
 	usage, openaiErr := adaptor.DoResponse(c, httpResp, relayInfo)
 	//log.Printf("usage: %v", usage)
 	if openaiErr != nil {
-		// reset status code 重置状态码
+		// reset status code
 		service.ResetStatusCode(openaiErr, statusCodeMappingStr)
 		return service.OpenAIErrorToClaudeError(openaiErr)
 	}

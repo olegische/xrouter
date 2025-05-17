@@ -12,7 +12,7 @@ import (
 )
 
 func SetEventStreamHeaders(c *gin.Context) {
-    // 检查是否已经设置过头部
+    // Check if headers have already been set
     if _, exists := c.Get("event_stream_headers_set"); exists {
         return
     }
@@ -23,7 +23,7 @@ func SetEventStreamHeaders(c *gin.Context) {
     c.Writer.Header().Set("Transfer-Encoding", "chunked")
     c.Writer.Header().Set("X-Accel-Buffering", "no")
     
-    // 设置标志，表示头部已经设置过
+    // Set flag indicating headers have been set
     c.Set("event_stream_headers_set", true)
 }
 
