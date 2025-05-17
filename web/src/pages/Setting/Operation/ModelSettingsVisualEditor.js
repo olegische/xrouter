@@ -45,7 +45,7 @@ export default function ModelSettingsVisualEditor(props) {
       const modelRatio = JSON.parse(props.options.ModelRatio || '{}');
       const completionRatio = JSON.parse(props.options.CompletionRatio || '{}');
 
-      // 合并所有模型名称
+      // Merge all model names from price, ratio, and completionRatio
       const modelNames = new Set([
         ...Object.keys(modelPrice),
         ...Object.keys(modelRatio),
@@ -62,25 +62,25 @@ export default function ModelSettingsVisualEditor(props) {
 
       setModels(modelData);
     } catch (error) {
-      console.error('JSON解析错误:', error);
+      console.error('JSON parse error:', error);
     }
   }, [props.options]);
 
-  // 首先声明分页相关的工具函数
+  // Pagination utility function
   const getPagedData = (data, currentPage, pageSize) => {
     const start = (currentPage - 1) * pageSize;
     const end = start + pageSize;
     return data.slice(start, end);
   };
 
-  // 在 return 语句之前，先处理过滤和分页逻辑
+  // Before the return statement, process filtering and pagination logic
   const filteredModels = models.filter((model) =>
     searchText
       ? model.name.toLowerCase().includes(searchText.toLowerCase())
       : true,
   );
 
-  // 然后基于过滤后的数据计算分页数据
+  // Calculate paged data based on filtered models
   const pagedData = getPagedData(filteredModels, currentPage, pageSize);
 
   const SubmitData = async () => {
@@ -93,11 +93,11 @@ export default function ModelSettingsVisualEditor(props) {
     let currentConvertModelName = '';
 
     try {
-      // 数据转换
+      // Data conversion
       models.forEach((model) => {
         currentConvertModelName = model.name;
         if (model.price !== '') {
-          // 如果价格不为空，则转换为浮点数，忽略倍率参数
+          // If price is not empty, convert to float and ignore ratio
           output.ModelPrice[model.name] = parseFloat(model.price);
         } else {
           if (model.ratio !== '')
@@ -109,7 +109,7 @@ export default function ModelSettingsVisualEditor(props) {
         }
       });
 
-      // 准备API请求数组
+      // Prepare API request array
       const finalOutput = {
         ModelPrice: JSON.stringify(output.ModelPrice, null, 2),
         ModelRatio: JSON.stringify(output.ModelRatio, null, 2),
@@ -123,30 +123,30 @@ export default function ModelSettingsVisualEditor(props) {
         });
       });
 
-      // 批量处理请求
+      // Batch process requests
       const results = await Promise.all(requestQueue);
 
-      // 验证结果
+      // Validate results
       if (requestQueue.length === 1) {
         if (results.includes(undefined)) return;
       } else if (requestQueue.length > 1) {
         if (results.includes(undefined)) {
-          return showError('部分保存失败，请重试');
+          return showError(t('Частично не удалось сохранить, попробуйте снова'));
         }
       }
 
-      // 检查每个请求的结果
+      // Check each request result
       for (const res of results) {
         if (!res.data.success) {
           return showError(res.data.message);
         }
       }
 
-      showSuccess('保存成功');
+      showSuccess(t('Успешно сохранено'));
       props.refresh();
     } catch (error) {
-      console.error('保存失败:', error);
-      showError('保存失败，请重试');
+      console.error('Save failed:', error);
+      showError(t('Не удалось сохранить, попробуйте снова'));
     } finally {
       setLoading(false);
     }
@@ -154,43 +154,43 @@ export default function ModelSettingsVisualEditor(props) {
 
   const columns = [
     {
-      title: t('模型名称'),
+      title: t('Название модели'),
       dataIndex: 'name',
       key: 'name',
     },
     {
-      title: t('模型固定价格'),
+      title: t('Фиксированная цена модели'),
       dataIndex: 'price',
       key: 'price',
       render: (text, record) => (
         <Input
           value={text}
-          placeholder={t('按量计费')}
+          placeholder={t('Поминутная тарификация')}
           onChange={(value) => updateModel(record.name, 'price', value)}
         />
       ),
     },
     {
-      title: t('模型倍率'),
+      title: t('Коэффициент модели'),
       dataIndex: 'ratio',
       key: 'ratio',
       render: (text, record) => (
         <Input
           value={text}
-          placeholder={record.price !== '' ? t('模型倍率') : t('默认补全倍率')}
+          placeholder={record.price !== '' ? t('Коэффициент модели') : t('Коэффициент по умолчанию')}
           disabled={record.price !== ''}
           onChange={(value) => updateModel(record.name, 'ratio', value)}
         />
       ),
     },
     {
-      title: t('补全倍率'),
+      title: t('Коэффициент автодополнения'),
       dataIndex: 'completionRatio',
       key: 'completionRatio',
       render: (text, record) => (
         <Input
           value={text}
-          placeholder={record.price !== '' ? t('补全倍率') : t('默认补全倍率')}
+          placeholder={record.price !== '' ? t('Коэффициент автодополнения') : t('Коэффициент автодополнения по умолчанию')}
           disabled={record.price !== ''}
           onChange={(value) =>
             updateModel(record.name, 'completionRatio', value)
@@ -199,7 +199,7 @@ export default function ModelSettingsVisualEditor(props) {
       ),
     },
     {
-      title: t('操作'),
+      title: t('Действия'),
       key: 'action',
       render: (_, record) => (
         <Space>
@@ -220,7 +220,7 @@ export default function ModelSettingsVisualEditor(props) {
 
   const updateModel = (name, field, value) => {
     if (isNaN(value)) {
-      showError('请输入数字');
+      showError(t('Введите число'));
       return;
     }
     setModels((prev) =>
@@ -243,7 +243,7 @@ export default function ModelSettingsVisualEditor(props) {
     completionTokenPrice,
   ) => {
     if (!modelTokenPrice || modelTokenPrice === '0') {
-      showError('模型价格不能为0');
+      showError(t('Цена модели не может быть 0'));
       return '';
     }
     return completionTokenPrice / modelTokenPrice;
@@ -313,12 +313,12 @@ export default function ModelSettingsVisualEditor(props) {
         ),
       );
       setVisible(false);
-      showSuccess(t('更新成功'));
+      showSuccess(t('Модель обновлена'));
     } else {
       // Add new model
       // Check if model name already exists
       if (models.some((model) => model.name === values.name)) {
-        showError(t('模型名称已存在'));
+        showError(t('Имя модели уже существует'));
         return;
       }
 
@@ -332,7 +332,7 @@ export default function ModelSettingsVisualEditor(props) {
         ...prev,
       ]);
       setVisible(false);
-      showSuccess(t('添加成功'));
+      showSuccess(t('Модель добавлена'));
     }
   };
 
@@ -417,14 +417,14 @@ export default function ModelSettingsVisualEditor(props) {
               setVisible(true);
             }}
           >
-            {t('添加模型')}
+            {t('Добавить модель')}
           </Button>
           <Button type='primary' icon={<IconSave />} onClick={SubmitData}>
-            {t('应用更改')}
+            {t('Применить изменения')}
           </Button>
           <Input
             prefix={<IconSearch />}
-            placeholder={t('搜索模型名称')}
+            placeholder={t('Поиск по названию модели')}
             value={searchText}
             onChange={(value) => {
               setSearchText(value);
@@ -442,7 +442,7 @@ export default function ModelSettingsVisualEditor(props) {
             total: filteredModels.length,
             onPageChange: (page) => setCurrentPage(page),
             formatPageText: (page) =>
-              t('第 {{start}} - {{end}} 条，共 {{total}} 条', {
+              t('С {{start}} по {{end}} из {{total}}', {
                 start: page.currentStart,
                 end: page.currentEnd,
                 total: filteredModels.length,
@@ -458,8 +458,8 @@ export default function ModelSettingsVisualEditor(props) {
           currentModel &&
           currentModel.name &&
           models.some((model) => model.name === currentModel.name)
-            ? t('编辑模型')
-            : t('添加模型')
+            ? t('Редактировать модель')
+            : t('Добавить модель')
         }
         visible={visible}
         onCancel={() => {
@@ -513,7 +513,7 @@ export default function ModelSettingsVisualEditor(props) {
         <Form getFormApi={(api) => (formRef.current = api)}>
           <Form.Input
             field='name'
-            label={t('模型名称')}
+            label={t('Название модели')}
             placeholder='strawberry'
             required
             disabled={
@@ -526,7 +526,7 @@ export default function ModelSettingsVisualEditor(props) {
             }
           />
 
-          <Form.Section text={t('定价模式')}>
+          <Form.Section text={t('Режим ценообразования')}>
             <div style={{ marginBottom: '16px' }}>
               <RadioGroup
                 type='button'
@@ -566,15 +566,15 @@ export default function ModelSettingsVisualEditor(props) {
                   }
                 }}
               >
-                <Radio value='per-token'>{t('按量计费')}</Radio>
-                <Radio value='per-request'>{t('按次计费')}</Radio>
+                <Radio value='per-token'>{t('Поминутная тарификация')}</Radio>
+                <Radio value='per-request'>{t('Потарифная тарификация')}</Radio>
               </RadioGroup>
             </div>
           </Form.Section>
 
           {pricingMode === 'per-token' && (
             <>
-              <Form.Section text={t('价格设置方式')}>
+              <Form.Section text={t('Способ задания цены')}>
                 <div style={{ marginBottom: '16px' }}>
                   <RadioGroup
                     type='button'
@@ -635,8 +635,8 @@ export default function ModelSettingsVisualEditor(props) {
                       }
                     }}
                   >
-                    <Radio value='ratio'>{t('按倍率设置')}</Radio>
-                    <Radio value='token-price'>{t('按价格设置')}</Radio>
+                    <Radio value='ratio'>{t('По коэффициенту')}</Radio>
+                    <Radio value='token-price'>{t('По цене')}</Radio>
                   </RadioGroup>
                 </div>
               </Form.Section>
@@ -645,8 +645,8 @@ export default function ModelSettingsVisualEditor(props) {
                 <>
                   <Form.Input
                     field='ratioInput'
-                    label={t('模型倍率')}
-                    placeholder={t('输入模型倍率')}
+                    label={t('Коэффициент модели')}
+                    placeholder={t('Введите коэффициент модели')}
                     onChange={(value) =>
                       setCurrentModel((prev) => ({
                         ...(prev || {}),
@@ -657,8 +657,8 @@ export default function ModelSettingsVisualEditor(props) {
                   />
                   <Form.Input
                     field='completionRatioInput'
-                    label={t('补全倍率')}
-                    placeholder={t('输入补全倍率')}
+                    label={t('Коэффициент автодополнения')}
+                    placeholder={t('Введите коэффициент автодополнения')}
                     onChange={(value) =>
                       setCurrentModel((prev) => ({
                         ...(prev || {}),
@@ -674,21 +674,21 @@ export default function ModelSettingsVisualEditor(props) {
                 <>
                   <Form.Input
                     field='modelTokenPrice'
-                    label={t('输入价格')}
+                    label={t('Цена за токен')}
                     onChange={(value) => {
                       handleTokenPriceChange(value);
                     }}
                     initValue={currentModel?.tokenPrice || ''}
-                    suffix={t('$/1M tokens')}
+                    suffix={t('$/1M токенов')}
                   />
                   <Form.Input
                     field='completionTokenPrice'
-                    label={t('输出价格')}
+                    label={t('Цена автодополнения')}
                     onChange={(value) => {
                       handleCompletionTokenPriceChange(value);
                     }}
                     initValue={currentModel?.completionTokenPrice || ''}
-                    suffix={t('$/1M tokens')}
+                    suffix={t('$/1M токенов')}
                   />
                 </>
               )}
@@ -698,8 +698,8 @@ export default function ModelSettingsVisualEditor(props) {
           {pricingMode === 'per-request' && (
             <Form.Input
               field='priceInput'
-              label={t('固定价格(每次)')}
-              placeholder={t('输入每次价格')}
+              label={t('Фиксированная цена (за раз)')}
+              placeholder={t('Введите цену за раз')}
               onChange={(value) =>
                 setCurrentModel((prev) => ({
                   ...(prev || {}),
