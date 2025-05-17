@@ -16,13 +16,13 @@ func parseAudio(audioBase64 string, format string) (duration float64, err error)
 
 	switch format {
 	case "pcm16":
-		samplesCount = len(audioData) / 2 // 16位 = 2字节每样本
+		samplesCount = len(audioData) / 2 // 16-bit = 2 bytes per sample
 		sampleRate = 24000                // 24kHz
 	case "g711_ulaw", "g711_alaw":
-		samplesCount = len(audioData) // 8位 = 1字节每样本
+		samplesCount = len(audioData) // 8-bit = 1 byte per sample
 		sampleRate = 8000             // 8kHz
 	default:
-		samplesCount = len(audioData) // 8位 = 1字节每样本
+		samplesCount = len(audioData) // 8-bit = 1 byte per sample
 		sampleRate = 8000             // 8kHz
 	}
 

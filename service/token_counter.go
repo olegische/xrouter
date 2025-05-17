@@ -64,7 +64,7 @@ func getTokenEncoder(model string) *tiktoken.Tiktoken {
 	if ok && tokenEncoder != nil {
 		return tokenEncoder
 	}
-	// 如果ok（即model在tokenEncoderMap中），但是tokenEncoder为nil，说明可能是自定义模型
+	// If ok (meaning model is in tokenEncoderMap), but tokenEncoder is nil, it might be a custom model
 	if ok {
 		tokenEncoder, err := tiktoken.EncodingForModel(model)
 		if err != nil {
@@ -74,7 +74,7 @@ func getTokenEncoder(model string) *tiktoken.Tiktoken {
 		tokenEncoderMap[model] = tokenEncoder
 		return tokenEncoder
 	}
-	// 如果model不在tokenEncoderMap中，直接返回默认的tokenEncoder
+	// If model is not in tokenEncoderMap, directly return the default tokenEncoder
 	return getModelDefaultTokenEncoder(model)
 }
 
@@ -100,7 +100,7 @@ func getImageToken(info *relaycommon.RelayInfo, imageUrl *dto.MessageImageUrl, m
 		return 3 * baseTokens, nil
 	}
 
-	// 同步One API的图片计费逻辑
+	// Synchronize with One API's image billing logic
 	if imageUrl.Detail == "auto" || imageUrl.Detail == "" {
 		imageUrl.Detail = "high"
 	}
@@ -110,7 +110,7 @@ func getImageToken(info *relaycommon.RelayInfo, imageUrl *dto.MessageImageUrl, m
 		tileTokens = 5667
 		baseTokens = 2833
 	}
-	// 是否统计图片token
+	// Whether to count image tokens
 	if !constant.GetMediaToken {
 		return 3 * baseTokens, nil
 	}
@@ -144,22 +144,22 @@ func getImageToken(info *relaycommon.RelayInfo, imageUrl *dto.MessageImageUrl, m
 	shortSide := config.Width
 	otherSide := config.Height
 	log.Printf("format: %s, width: %d, height: %d", format, config.Width, config.Height)
-	// 缩放倍数
+	// Scaling factor
 	scale := 1.0
 	if config.Height < shortSide {
 		shortSide = config.Height
 		otherSide = config.Width
 	}
 
-	// 将最小变的尺寸缩小到768以下，如果大于768，则缩放到768
+	// Scale the smallest dimension to below 768, if greater than 768, scale it to 768
 	if shortSide > 768 {
 		scale = float64(shortSide) / 768
 		shortSide = 768
 	}
-	// 将另一边按照相同的比例缩小，向上取整
+	// Scale the other dimension by the same ratio, rounding up
 	otherSide = int(math.Ceil(float64(otherSide) / scale))
 	log.Printf("shortSide: %d, otherSide: %d, scale: %f", shortSide, otherSide, scale)
-	// 计算图片的token数量(边的长度除以512，向上取整)
+	// Calculate the number of tokens for the image (edge length divided by 512, rounded up)
 	tiles := (shortSide + 511) / 512 * ((otherSide + 511) / 512)
 	log.Printf("tiles: %d", tiles)
 	return tiles*tileTokens + baseTokens, nil
@@ -402,7 +402,7 @@ func CountTokenMessages(info *relaycommon.RelayInfo, messages []dto.Message, mod
 					tokenNum += imageTokenNum
 					log.Printf("image token num: %d", imageTokenNum)
 				} else if m.Type == dto.ContentTypeInputAudio {
-					// TODO: 音频token数量计算
+					// TODO: Audio token count calculation
 					tokenNum += 100
 				} else if m.Type == dto.ContentTypeFile {
 					tokenNum += 5000
@@ -491,7 +491,7 @@ func CountAudioTokenOutput(audioBase64 string, audioFormat string) (int, error) 
 //	}
 //}
 
-// CountTextToken 统计文本的token数量，仅当文本包含敏感词，返回错误，同时返回token数量
+// CountTextToken Count the number of tokens in the text, returns an error only when the text contains sensitive words, while also returning the token count
 func CountTextToken(text string, model string) (int, error) {
 	var err error
 	tokenEncoder := getTokenEncoder(model)
