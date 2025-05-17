@@ -174,7 +174,7 @@ func updateOptionMap(key string, value string) (err error) {
 
 	// Check if it's a model configuration - use a more standardized approach to handle
 	if handleConfigUpdate(key, value) {
-		return nil // 已由配置系统处理
+		return nil // Already processed by the configuration system
 	}
 
 	// Handle traditional configuration items...
@@ -382,27 +382,27 @@ func updateOptionMap(key string, value string) (err error) {
 	return err
 }
 
-// handleConfigUpdate 处理分层配置更新，返回是否已处理
+// handleConfigUpdate Handles layered configuration updates, returns whether it has been processed
 func handleConfigUpdate(key, value string) bool {
 	parts := strings.SplitN(key, ".", 2)
 	if len(parts) != 2 {
-		return false // 不是分层配置
+		return false // Not a layered configuration
 	}
 
 	configName := parts[0]
 	configKey := parts[1]
 
-	// 获取配置对象
+	// Get configuration object
 	cfg := config.GlobalConfig.Get(configName)
 	if cfg == nil {
-		return false // 未注册的配置
+		return false // Unregistered configuration
 	}
 
-	// 更新配置
+	// Update configuration
 	configMap := map[string]string{
 		configKey: value,
 	}
 	config.UpdateConfigFromMap(cfg, configMap)
 
-	return true // 已处理
+	return true // Processed
 }
