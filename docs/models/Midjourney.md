@@ -1,46 +1,46 @@
-# Midjourney Proxy API文档
+# Документация Midjourney Proxy API
 
-**简介**:Midjourney Proxy API文档
+**Введение**: Документация Midjourney Proxy API
 
-## 接口列表
-支持的接口如下：
+## Список интерфейсов
+Поддерживаемые интерфейсы:
 + [x] /mj/submit/imagine
 + [x] /mj/submit/change
 + [x] /mj/submit/blend
 + [x] /mj/submit/describe
-+ [x] /mj/image/{id} （通过此接口获取图片，**请必须在系统设置中填写服务器地址！！**）
-+ [x] /mj/task/{id}/fetch （此接口返回的图片地址为经过One API转发的地址）
++ [x] /mj/image/{id} (Получение изображения через этот интерфейс, **обязательно укажите адрес сервера в системных настройках!!**)
++ [x] /mj/task/{id}/fetch (Адрес изображения, возвращаемый этим интерфейсом, перенаправляется через One API)
 + [x] /task/list-by-condition
-+ [x] /mj/submit/action （仅midjourney-proxy-plus支持，下同）
++ [x] /mj/submit/action (поддерживается только midjourney-proxy-plus, аналогично для следующих)
 + [x] /mj/submit/modal
 + [x] /mj/submit/shorten
 + [x] /mj/task/{id}/image-seed
-+ [x] /mj/insight-face/swap （InsightFace）
++ [x] /mj/insight-face/swap (InsightFace)
 
-## 模型列表
+## Список моделей
 
-### midjourney-proxy支持
+### Поддерживается midjourney-proxy
 
-- mj_imagine (绘图)
-- mj_variation (变换)
-- mj_reroll (重绘)
-- mj_blend (混合)
-- mj_upscale (放大)
-- mj_describe (图生文)
+- mj_imagine (создание изображения)
+- mj_variation (вариация)
+- mj_reroll (перерисовка)
+- mj_blend (смешивание)
+- mj_upscale (увеличение)
+- mj_describe (изображение в текст)
 
-### 仅midjourney-proxy-plus支持
+### Поддерживается только midjourney-proxy-plus
 
-- mj_zoom (比例变焦)
-- mj_shorten (提示词缩短)
-- mj_modal (窗口提交，局部重绘和自定义比例变焦必须和mj_modal一同添加)
-- mj_inpaint (局部重绘提交，必须和mj_modal一同添加)
-- mj_custom_zoom (自定义比例变焦，必须和mj_modal一同添加)
-- mj_high_variation (强变换)
-- mj_low_variation (弱变换)
-- mj_pan (平移)
-- swap_face (换脸)
+- mj_zoom (масштабирование)
+- mj_shorten (сокращение подсказок)
+- mj_modal (отправка через окно, локальная перерисовка и настраиваемое масштабирование должны добавляться вместе с mj_modal)
+- mj_inpaint (отправка локальной перерисовки, должна добавляться вместе с mj_modal)
+- mj_custom_zoom (настраиваемое масштабирование, должно добавляться вместе с mj_modal)
+- mj_high_variation (сильная вариация)
+- mj_low_variation (слабая вариация)
+- mj_pan (панорамирование)
+- swap_face (замена лица)
 
-## 模型价格设置（在设置-运营设置-模型固定价格设置中设置）
+## Настройка цен моделей (настраивается в Настройки-Операционные настройки-Настройка фиксированных цен моделей)
 ```json
 {
   "mj_imagine": 0.1,
@@ -60,23 +60,20 @@
   "swap_face": 0.05
 }
 ```
-其中mj_inpaint和mj_custom_zoom的价格设置为0，是因为这两个模型需要搭配mj_modal使用，所以价格由mj_modal决定。
+Цены для mj_inpaint и mj_custom_zoom установлены в 0, поскольку эти две модели должны использоваться вместе с mj_modal, поэтому цена определяется mj_modal.
 
-## 渠道设置
+## Настройка канала
 
-### 对接 midjourney-proxy(plus)
+### Интеграция с midjourney-proxy(plus)
 
-1.
+1. Разверните Midjourney-Proxy и настройте учетную запись midjourney и т.д. (настоятельно рекомендуется установить ключ), [адрес проекта](https://github.com/novicezk/midjourney-proxy)
 
-部署Midjourney-Proxy，并配置好midjourney账号等（强烈建议设置密钥），[项目地址](https://github.com/novicezk/midjourney-proxy)
+2. Добавьте канал в управлении каналами, выберите тип канала **Midjourney Proxy**, если это версия plus, выберите **Midjourney Proxy Plus**, модели см. в списке моделей выше
+3. В поле **Прокси** укажите адрес развернутого midjourney-proxy, например: http://localhost:8080
+4. В поле ключа введите ключ midjourney-proxy, если ключ не установлен, можно ввести что угодно
 
-2. 在渠道管理中添加渠道，渠道类型选择**Midjourney Proxy**，如果是plus版本选择**Midjourney Proxy Plus**
-   ，模型请参考上方模型列表
-3. **代理**填写midjourney-proxy部署的地址，例如：http://localhost:8080
-4. 密钥填写midjourney-proxy的密钥，如果没有设置密钥，可以随便填
+### Интеграция с вышестоящим new api
 
-### 对接上游new api
-
-1. 在渠道管理中添加渠道，渠道类型选择**Midjourney Proxy Plus**，模型请参考上方模型列表
-2. **代理**填写上游new api的地址，例如：http://localhost:3000
-3. 密钥填写上游new api的密钥
+1. Добавьте канал в управлении каналами, выберите тип канала **Midjourney Proxy Plus**, модели см. в списке моделей выше
+2. В поле **Прокси** укажите адрес вышестоящего new api, например: http://localhost:3000
+3. В поле ключа введите ключ вышестоящего new api
