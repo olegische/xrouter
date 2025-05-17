@@ -24,7 +24,7 @@ export default function SettingGlobalModel(props) {
 
   function onSubmit() {
     const updateArray = compareObjects(inputs, inputsRow);
-    if (!updateArray.length) return showWarning(t('你似乎并没有修改什么'));
+    if (!updateArray.length) return showWarning(t('Похоже, вы ничего не изменили'));
     const requestQueue = updateArray.map((item) => {
       let value = String(inputs[item.key]);
 
@@ -40,13 +40,13 @@ export default function SettingGlobalModel(props) {
           if (res.includes(undefined)) return;
         } else if (requestQueue.length > 1) {
           if (res.includes(undefined))
-            return showError(t('部分保存失败，请重试'));
+            return showError(t('Частично не удалось сохранить, попробуйте снова'));
         }
-        showSuccess(t('保存成功'));
+        showSuccess(t('Успешно сохранено'));
         props.refresh();
       })
       .catch(() => {
-        showError(t('保存失败，请重试'));
+        showError(t('Не удалось сохранить, попробуйте снова'));
       })
       .finally(() => {
         setLoading(false);
@@ -73,11 +73,11 @@ export default function SettingGlobalModel(props) {
           getFormApi={(formAPI) => (refForm.current = formAPI)}
           style={{ marginBottom: 15 }}
         >
-          <Form.Section text={t('全局设置')}>
+          <Form.Section text={t('Глобальные настройки')}>
             <Row>
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.Switch
-                  label={t('启用请求透传')}
+                  label={t('Включить прозрачную передачу запросов')}
                   field={'global.pass_through_request_enabled'}
                   onChange={(value) =>
                     setInputs({
@@ -85,34 +85,32 @@ export default function SettingGlobalModel(props) {
                       'global.pass_through_request_enabled': value,
                     })
                   }
-                  extraText={
-                    '开启后，所有请求将直接透传给上游，不会进行任何处理（重定向和渠道适配也将失效）,请谨慎开启'
-                  }
+                  extraText={t('После включения все запросы будут напрямую передаваться upstream, без какой-либо обработки (редиректы и адаптация каналов также будут отключены). Используйте с осторожностью.')}
                 />
               </Col>
             </Row>
             
-            <Form.Section text={t('连接保活设置')}>
+            <Form.Section text={t('Настройки поддержания соединения')}>
             <Row style={{ marginTop: 10 }}>
                   <Col span={24}>
                     <Banner 
                       type="warning"
-                      description="警告：启用保活后，如果已经写入保活数据后渠道出错，系统无法重试，如果必须开启，推荐设置尽可能大的Ping间隔"
+                      description={t('Внимание: если включено поддержание соединения, и после отправки ping произойдет ошибка канала, система не сможет повторить попытку. Если необходимо включить, рекомендуется установить максимально возможный интервал Ping.')}
                     />
                   </Col>
                 </Row>
               <Row>
                 <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                   <Form.Switch
-                    label={t('启用Ping间隔')}
+                    label={t('Включить интервал Ping')}
                     field={'general_setting.ping_interval_enabled'}
                     onChange={(value) => setInputs({ ...inputs, 'general_setting.ping_interval_enabled': value })}
-                    extraText={'开启后，将定期发送ping数据保持连接活跃'}
+                    extraText={t('После включения будет периодически отправляться ping для поддержания соединения активным')}
                   />
                 </Col>
                 <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                   <Form.InputNumber
-                    label={t('Ping间隔（秒）')}
+                    label={t('Интервал Ping (сек)')}
                     field={'general_setting.ping_interval_seconds'}
                     onChange={(value) => setInputs({ ...inputs, 'general_setting.ping_interval_seconds': value })}
                     min={1}
@@ -124,7 +122,7 @@ export default function SettingGlobalModel(props) {
 
             <Row>
               <Button size='default' onClick={onSubmit}>
-                {t('保存')}
+                {t('Сохранить')}
               </Button>
             </Row>
           </Form.Section>

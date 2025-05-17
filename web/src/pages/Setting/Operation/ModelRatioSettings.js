@@ -37,7 +37,7 @@ export default function ModelRatioSettings(props) {
         .then(() => {
           const updateArray = compareObjects(inputs, inputsRow);
           if (!updateArray.length)
-            return showWarning(t('你似乎并没有修改什么'));
+            return showWarning(t('Похоже, вы ничего не изменили'));
 
           const requestQueue = updateArray.map((item) => {
             const value =
@@ -53,8 +53,8 @@ export default function ModelRatioSettings(props) {
               if (res.includes(undefined)) {
                 return showError(
                   requestQueue.length > 1
-                    ? t('部分保存失败，请重试')
-                    : t('保存失败'),
+                    ? t('Частично не удалось сохранить, попробуйте снова')
+                    : t('Не удалось сохранить'),
                 );
               }
 
@@ -64,22 +64,22 @@ export default function ModelRatioSettings(props) {
                 }
               }
 
-              showSuccess(t('保存成功'));
+              showSuccess(t('Успешно сохранено'));
               props.refresh();
             })
             .catch((error) => {
               console.error('Unexpected error:', error);
-              showError(t('保存失败，请重试'));
+              showError(t('Не удалось сохранить, попробуйте снова'));
             })
             .finally(() => {
               setLoading(false);
             });
         })
         .catch(() => {
-          showError(t('请检查输入'));
+          showError(t('Проверьте введённые данные'));
         });
     } catch (error) {
-      showError(t('请检查输入'));
+      showError(t('Проверьте введённые данные'));
       console.error(error);
     }
   }
@@ -121,10 +121,10 @@ export default function ModelRatioSettings(props) {
           <Row gutter={16}>
             <Col xs={24} sm={16}>
               <Form.TextArea
-                label={t('模型固定价格')}
-                extraText={t('一次调用消耗多少刀，优先级大于模型倍率')}
+                label={t('Фиксированная цена модели')}
+                extraText={t('Сколько стоит один вызов, приоритет выше, чем у коэффициента модели')}
                 placeholder={t(
-                  '为一个 JSON 文本，键为模型名称，值为一次调用消耗多少刀，比如 "gpt-4-gizmo-*": 0.1，一次消耗0.1刀',
+                  'JSON-текст, где ключ — имя модели, значение — стоимость одного вызова, например "gpt-4-gizmo-*": 0.1, один вызов стоит 0.1$',
                 )}
                 field={'ModelPrice'}
                 autosize={{ minRows: 6, maxRows: 12 }}
@@ -133,7 +133,7 @@ export default function ModelRatioSettings(props) {
                 rules={[
                   {
                     validator: (rule, value) => verifyJSON(value),
-                    message: '不是合法的 JSON 字符串',
+                    message: 'Недопустимая строка JSON',
                   },
                 ]}
                 onChange={(value) =>
@@ -145,8 +145,8 @@ export default function ModelRatioSettings(props) {
           <Row gutter={16}>
             <Col xs={24} sm={16}>
               <Form.TextArea
-                label={t('模型倍率')}
-                placeholder={t('为一个 JSON 文本，键为模型名称，值为倍率')}
+                label={t('Коэффициент модели')}
+                placeholder={t('JSON-текст, где ключ — имя модели, значение — коэффициент')}
                 field={'ModelRatio'}
                 autosize={{ minRows: 6, maxRows: 12 }}
                 trigger='blur'
@@ -154,7 +154,7 @@ export default function ModelRatioSettings(props) {
                 rules={[
                   {
                     validator: (rule, value) => verifyJSON(value),
-                    message: '不是合法的 JSON 字符串',
+                    message: 'Недопустимая строка JSON',
                   },
                 ]}
                 onChange={(value) =>
@@ -166,8 +166,8 @@ export default function ModelRatioSettings(props) {
           <Row gutter={16}>
             <Col xs={24} sm={16}>
               <Form.TextArea
-                label={t('提示缓存倍率')}
-                placeholder={t('为一个 JSON 文本，键为模型名称，值为倍率')}
+                label={t('Коэффициент кэширования подсказок')}
+                placeholder={t('JSON-текст, где ключ — имя модели, значение — коэффициент')}
                 field={'CacheRatio'}
                 autosize={{ minRows: 6, maxRows: 12 }}
                 trigger='blur'
@@ -175,7 +175,7 @@ export default function ModelRatioSettings(props) {
                 rules={[
                   {
                     validator: (rule, value) => verifyJSON(value),
-                    message: '不是合法的 JSON 字符串',
+                    message: 'Недопустимая строка JSON',
                   },
                 ]}
                 onChange={(value) =>
@@ -187,9 +187,9 @@ export default function ModelRatioSettings(props) {
           <Row gutter={16}>
             <Col xs={24} sm={16}>
               <Form.TextArea
-                label={t('模型补全倍率（仅对自定义模型有效）')}
-                extraText={t('仅对自定义模型有效')}
-                placeholder={t('为一个 JSON 文本，键为模型名称，值为倍率')}
+                label={t('Коэффициент автодополнения модели (только для пользовательских моделей)')}
+                extraText={t('Только для пользовательских моделей')}
+                placeholder={t('JSON-текст, где ключ — имя модели, значение — коэффициент')}
                 field={'CompletionRatio'}
                 autosize={{ minRows: 6, maxRows: 12 }}
                 trigger='blur'
@@ -197,7 +197,7 @@ export default function ModelRatioSettings(props) {
                 rules={[
                   {
                     validator: (rule, value) => verifyJSON(value),
-                    message: '不是合法的 JSON 字符串',
+                    message: 'Недопустимая строка JSON',
                   },
                 ]}
                 onChange={(value) =>
@@ -209,15 +209,15 @@ export default function ModelRatioSettings(props) {
         </Form.Section>
       </Form>
       <Space>
-        <Button onClick={onSubmit}>{t('保存模型倍率设置')}</Button>
+        <Button onClick={onSubmit}>{t('Сохранить настройки коэффициентов модели')}</Button>
         <Popconfirm
-          title={t('确定重置模型倍率吗？')}
-          content={t('此修改将不可逆')}
+          title={t('Вы уверены, что хотите сбросить коэффициенты модели?')}
+          content={t('Это действие необратимо')}
           okType={'danger'}
           position={'top'}
           onConfirm={resetModelRatio}
         >
-          <Button type={'danger'}>{t('重置模型倍率')}</Button>
+          <Button type={'danger'}>{t('Сбросить коэффициенты модели')}</Button>
         </Popconfirm>
       </Space>
     </Spin>

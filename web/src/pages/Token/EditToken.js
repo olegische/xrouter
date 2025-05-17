@@ -144,19 +144,19 @@ const EditToken = (props) => {
     loadGroups();
   }, [isEdit]);
 
-  // 新增 state 变量 tokenCount 来记录用户想要创建的令牌数量，默认为 1
+  // Add state variable tokenCount to record the number of tokens the user wants to create, default is 1
   const [tokenCount, setTokenCount] = useState(1);
 
-  // 新增处理 tokenCount 变化的函数
+  // Add function to handle changes in tokenCount
   const handleTokenCountChange = (value) => {
-    // 确保用户输入的是正整数
+    // Ensure the user input is a positive integer
     const count = parseInt(value, 10);
     if (!isNaN(count) && count > 0) {
       setTokenCount(count);
     }
   };
 
-  // 生成一个随机的四位字母数字字符串
+  // Generate a random 6-character alphanumeric string as a suffix
   const generateRandomSuffix = () => {
     const characters =
       'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -172,13 +172,13 @@ const EditToken = (props) => {
   const submit = async () => {
     setLoading(true);
     if (isEdit) {
-      // 编辑令牌的逻辑保持不变
+      // The logic for editing a token remains unchanged
       let localInputs = { ...inputs };
       localInputs.remain_quota = parseInt(localInputs.remain_quota);
       if (localInputs.expired_time !== -1) {
         let time = Date.parse(localInputs.expired_time);
         if (isNaN(time)) {
-          showError(t('过期时间格式错误！'));
+          showError(t('Неверный формат времени истечения!'));
           setLoading(false);
           return;
         }
@@ -191,19 +191,19 @@ const EditToken = (props) => {
       });
       const { success, message } = res.data;
       if (success) {
-        showSuccess(t('令牌更新成功！'));
+        showSuccess(t('Токен успешно обновлен!'));
         props.refresh();
         props.handleClose();
       } else {
         showError(t(message));
       }
     } else {
-      // 处理新增多个令牌的情况
-      let successCount = 0; // 记录成功创建的令牌数量
+      // Handle the case of creating multiple tokens
+      let successCount = 0; // Record the number of successfully created tokens
       for (let i = 0; i < tokenCount; i++) {
         let localInputs = { ...inputs };
         if (i !== 0) {
-          // 如果用户想要创建多个令牌，则给每个令牌一个序号后缀
+          // If the user wants to create multiple tokens, add a serial number suffix to each token
           localInputs.name = `${inputs.name}-${generateRandomSuffix()}`;
         }
         localInputs.remain_quota = parseInt(localInputs.remain_quota);
@@ -211,7 +211,7 @@ const EditToken = (props) => {
         if (localInputs.expired_time !== -1) {
           let time = Date.parse(localInputs.expired_time);
           if (isNaN(time)) {
-            showError(t('过期时间格式错误！'));
+            showError(t('Неверный формат времени истечения!'));
             setLoading(false);
             break;
           }
@@ -225,19 +225,19 @@ const EditToken = (props) => {
           successCount++;
         } else {
           showError(t(message));
-          break; // 如果创建失败，终止循环
+          break; // If creation fails, terminate the loop
         }
       }
 
       if (successCount > 0) {
-        showSuccess(t('令牌创建成功，请在列表页面点击复制获取令牌！'));
+        showSuccess(t('Токен успешно создан, пожалуйста, нажмите "Копировать" на странице списка для получения токена!'));
         props.refresh();
         props.handleClose();
       }
     }
     setLoading(false);
-    setInputs(originInputs); // 重置表单
-    setTokenCount(1); // 重置数量为默认值
+    setInputs(originInputs); // Reset the form
+    setTokenCount(1); // Reset the count to the default value
   };
 
   return (
@@ -246,7 +246,7 @@ const EditToken = (props) => {
         placement={isEdit ? 'right' : 'left'}
         title={
           <Title level={3}>
-            {isEdit ? t('更新令牌信息') : t('创建新的令牌')}
+            {isEdit ? t('Обновить информацию о токене') : t('Создать новый токен')}
           </Title>
         }
         headerStyle={{ borderBottom: '1px solid var(--semi-color-border)' }}
@@ -256,7 +256,7 @@ const EditToken = (props) => {
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
             <Space>
               <Button theme='solid' size={'large'} onClick={submit}>
-                {t('提交')}
+                {t('Отправить')}
               </Button>
               <Button
                 theme='solid'
@@ -264,7 +264,7 @@ const EditToken = (props) => {
                 type={'tertiary'}
                 onClick={handleCancel}
               >
-                {t('取消')}
+                {t('Отмена')}
               </Button>
             </Space>
           </div>
@@ -276,9 +276,9 @@ const EditToken = (props) => {
         <Spin spinning={loading}>
           <Input
             style={{ marginTop: 20 }}
-            label={t('名称')}
+            label={t('Имя')}
             name='name'
-            placeholder={t('请输入名称')}
+            placeholder={t('Пожалуйста, введите имя')}
             onChange={(value) => handleInputChange('name', value)}
             value={name}
             autoComplete='new-password'
@@ -286,9 +286,9 @@ const EditToken = (props) => {
           />
           <Divider />
           <DatePicker
-            label={t('过期时间')}
+            label={t('Время истечения')}
             name='expired_time'
-            placeholder={t('请选择过期时间')}
+            placeholder={t('Пожалуйста, выберите время истечения')}
             onChange={(value) => handleInputChange('expired_time', value)}
             value={expired_time}
             autoComplete='new-password'
@@ -302,7 +302,7 @@ const EditToken = (props) => {
                   setExpiredTime(0, 0, 0, 0);
                 }}
               >
-                {t('永不过期')}
+                {t('Никогда не истекает')}
               </Button>
               <Button
                 type={'tertiary'}
@@ -310,7 +310,7 @@ const EditToken = (props) => {
                   setExpiredTime(0, 0, 1, 0);
                 }}
               >
-                {t('一小时')}
+                {t('Один час')}
               </Button>
               <Button
                 type={'tertiary'}
@@ -318,7 +318,7 @@ const EditToken = (props) => {
                   setExpiredTime(1, 0, 0, 0);
                 }}
               >
-                {t('一个月')}
+                {t('Один месяц')}
               </Button>
               <Button
                 type={'tertiary'}
@@ -326,7 +326,7 @@ const EditToken = (props) => {
                   setExpiredTime(0, 1, 0, 0);
                 }}
               >
-                {t('一天')}
+                {t('Один день')}
               </Button>
             </Space>
           </div>
@@ -335,16 +335,16 @@ const EditToken = (props) => {
           <Banner
             type={'warning'}
             description={t(
-              '注意，令牌的额度仅用于限制令牌本身的最大额度使用量，实际的使用受到账户的剩余额度限制。',
+              'Внимание: квота токена используется только для ограничения максимального объема использования самого токена. Фактическое использование ограничено оставшейся квотой аккаунта.'
             )}
           ></Banner>
           <div style={{ marginTop: 20 }}>
-            <Typography.Text>{`${t('额度')}${renderQuotaWithPrompt(remain_quota)}`}</Typography.Text>
+            <Typography.Text>{`${t('Квота')}${renderQuotaWithPrompt(remain_quota)}`}</Typography.Text>
           </div>
           <AutoComplete
             style={{ marginTop: 8 }}
             name='remain_quota'
-            placeholder={t('请输入额度')}
+            placeholder={t('Пожалуйста, введите квоту')}
             onChange={(value) => handleInputChange('remain_quota', value)}
             value={remain_quota}
             autoComplete='new-password'
@@ -364,22 +364,22 @@ const EditToken = (props) => {
           {!isEdit && (
             <>
               <div style={{ marginTop: 20 }}>
-                <Typography.Text>{t('新建数量')}</Typography.Text>
+                <Typography.Text>{t('Количество для создания')}</Typography.Text>
               </div>
               <AutoComplete
                 style={{ marginTop: 8 }}
-                label={t('数量')}
-                placeholder={t('请选择或输入创建令牌的数量')}
+                label={t('Количество')}
+                placeholder={t('Пожалуйста, выберите или введите количество токенов для создания')}
                 onChange={(value) => handleTokenCountChange(value)}
                 onSelect={(value) => handleTokenCountChange(value)}
                 value={tokenCount.toString()}
                 autoComplete='off'
                 type='number'
                 data={[
-                  { value: 10, label: t('10个') },
-                  { value: 20, label: t('20个') },
-                  { value: 30, label: t('30个') },
-                  { value: 100, label: t('100个') },
+                  { value: 10, label: t('10 штук') },
+                  { value: 20, label: t('20 штук') },
+                  { value: 30, label: t('30 штук') },
+                  { value: 100, label: t('100 штук') },
                 ]}
                 disabled={unlimited_quota}
               />
@@ -394,19 +394,19 @@ const EditToken = (props) => {
                 setUnlimitedQuota();
               }}
             >
-              {unlimited_quota ? t('取消无限额度') : t('设为无限额度')}
+              {unlimited_quota ? t('Отменить неограниченную квоту') : t('Установить неограниченную квоту')}
             </Button>
           </div>
           <Divider />
           <div style={{ marginTop: 10 }}>
             <Typography.Text>
-              {t('IP白名单（请勿过度信任此功能）')}
+              {t('Белый список IP (не слишком доверяйте этой функции)')}
             </Typography.Text>
           </div>
           <TextArea
-            label={t('IP白名单')}
+            label={t('Белый список IP')}
             name='allow_ips'
-            placeholder={t('允许的IP，一行一个，不填写则不限制')}
+            placeholder={t('Разрешенные IP, по одному в строке, если не указано — не ограничено')}
             onChange={(value) => {
               handleInputChange('allow_ips', value);
             }}
@@ -422,14 +422,14 @@ const EditToken = (props) => {
                   handleInputChange('model_limits_enabled', e.target.checked)
                 }
               >
-                {t('启用模型限制（非必要，不建议启用）')}
+                {t('Включить ограничение моделей (не рекомендуется, если не требуется)')}
               </Checkbox>
             </Space>
           </div>
 
           <Select
             style={{ marginTop: 8 }}
-            placeholder={t('请选择该渠道所支持的模型')}
+            placeholder={t('Пожалуйста, выберите поддерживаемые модели для этого канала')}
             name='models'
             required
             multiple
@@ -443,12 +443,12 @@ const EditToken = (props) => {
             disabled={!model_limits_enabled}
           />
           <div style={{ marginTop: 10 }}>
-            <Typography.Text>{t('令牌分组，默认为用户的分组')}</Typography.Text>
+            <Typography.Text>{t('Группа токена, по умолчанию группа пользователя')}</Typography.Text>
           </div>
           {groups.length > 0 ? (
             <Select
               style={{ marginTop: 8 }}
-              placeholder={t('令牌分组，默认为用户的分组')}
+              placeholder={t('Группа токена, по умолчанию группа пользователя')}
               name='gruop'
               required
               selection
@@ -464,7 +464,7 @@ const EditToken = (props) => {
           ) : (
             <Select
               style={{ marginTop: 8 }}
-              placeholder={t('管理员未设置用户可选分组')}
+              placeholder={t('Администратор не установил доступные группы для пользователя')}
               name='gruop'
               disabled={true}
             />

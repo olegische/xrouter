@@ -20,27 +20,27 @@ const Setting = () => {
 
   if (isRoot()) {
     panes.push({
-      tab: t('运营设置'),
+      tab: t('Настройки эксплуатации'),
       content: <OperationSetting />,
       itemKey: 'operation',
     });
     panes.push({
-      tab: t('速率限制设置'),
+      tab: t('Настройки ограничения скорости'),
       content: <RateLimitSetting />,
       itemKey: 'ratelimit',
     });
     panes.push({
-      tab: t('模型相关设置'),
+      tab: t('Настройки моделей'),
       content: <ModelSetting />,
       itemKey: 'models',
     });
     panes.push({
-      tab: t('系统设置'),
+      tab: t('Системные настройки'),
       content: <SystemSetting />,
       itemKey: 'system',
     });
     panes.push({
-      tab: t('其他设置'),
+      tab: t('Другие настройки'),
       content: <OtherSetting />,
       itemKey: 'other',
     });

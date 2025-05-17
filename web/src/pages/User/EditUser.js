@@ -104,7 +104,7 @@ const EditUser = (props) => {
     }
     const { success, message } = res.data;
     if (success) {
-      showSuccess('用户信息更新成功！');
+      showSuccess('Информация о пользователе успешно обновлена!');
       props.refresh();
       props.handleClose();
     } else {
@@ -129,7 +129,7 @@ const EditUser = (props) => {
     <>
       <SideSheet
         placement={'right'}
-        title={<Title level={3}>{t('编辑用户')}</Title>}
+        title={<Title level={3}>{t('Редактировать пользователя')}</Title>}
         headerStyle={{ borderBottom: '1px solid var(--semi-color-border)' }}
         bodyStyle={{ borderBottom: '1px solid var(--semi-color-border)' }}
         visible={props.visible}
@@ -137,7 +137,7 @@ const EditUser = (props) => {
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
             <Space>
               <Button theme='solid' size={'large'} onClick={submit}>
-                {t('提交')}
+                {t('Отправить')}
               </Button>
               <Button
                 theme='solid'
@@ -145,7 +145,7 @@ const EditUser = (props) => {
                 type={'tertiary'}
                 onClick={handleCancel}
               >
-                {t('取消')}
+                {t('Отмена')}
               </Button>
             </Space>
           </div>
@@ -156,35 +156,35 @@ const EditUser = (props) => {
       >
         <Spin spinning={loading}>
           <div style={{ marginTop: 20 }}>
-            <Typography.Text>{t('用户名')}</Typography.Text>
+            <Typography.Text>{t('Имя пользователя')}</Typography.Text>
           </div>
           <Input
-            label={t('用户名')}
+            label={t('Имя пользователя')}
             name='username'
-            placeholder={t('请输入新的用户名')}
+            placeholder={t('Пожалуйста, введите новое имя пользователя')}
             onChange={(value) => handleInputChange('username', value)}
             value={username}
             autoComplete='new-password'
           />
           <div style={{ marginTop: 20 }}>
-            <Typography.Text>{t('密码')}</Typography.Text>
+            <Typography.Text>{t('Пароль')}</Typography.Text>
           </div>
           <Input
-            label={t('密码')}
+            label={t('Пароль')}
             name='password'
             type={'password'}
-            placeholder={t('请输入新的密码，最短 8 位')}
+            placeholder={t('Пожалуйста, введите новый пароль, минимум 8 символов')}
             onChange={(value) => handleInputChange('password', value)}
             value={password}
             autoComplete='new-password'
           />
           <div style={{ marginTop: 20 }}>
-            <Typography.Text>{t('显示名称')}</Typography.Text>
+            <Typography.Text>{t('Отображаемое имя')}</Typography.Text>
           </div>
           <Input
-            label={t('显示名称')}
+            label={t('Отображаемое имя')}
             name='display_name'
-            placeholder={t('请输入新的显示名称')}
+            placeholder={t('Пожалуйста, введите новое отображаемое имя')}
             onChange={(value) => handleInputChange('display_name', value)}
             value={display_name}
             autoComplete='new-password'
@@ -192,17 +192,17 @@ const EditUser = (props) => {
           {userId && (
             <>
               <div style={{ marginTop: 20 }}>
-                <Typography.Text>{t('分组')}</Typography.Text>
+                <Typography.Text>{t('Группа')}</Typography.Text>
               </div>
               <Select
-                placeholder={t('请选择分组')}
+                placeholder={t('Пожалуйста, выберите группу')}
                 name='group'
                 fluid
                 search
                 selection
                 allowAdditions
                 additionLabel={t(
-                  '请在系统设置页面编辑分组倍率以添加新的分组：',
+                  'Пожалуйста, отредактируйте коэффициенты групп на странице системных настроек, чтобы добавить новую группу:'
                 )}
                 onChange={(value) => handleInputChange('group', value)}
                 value={inputs.group}
@@ -210,78 +210,78 @@ const EditUser = (props) => {
                 optionList={groupOptions}
               />
               <div style={{ marginTop: 20 }}>
-                <Typography.Text>{`${t('剩余额度')}${renderQuotaWithPrompt(quota)}`}</Typography.Text>
+                <Typography.Text>{`${t('Оставшаяся квота')}${renderQuotaWithPrompt(quota)}`}</Typography.Text>
               </div>
               <Space>
                 <Input
                   name='quota'
-                  placeholder={t('请输入新的剩余额度')}
+                  placeholder={t('Пожалуйста, введите новую оставшуюся квоту')}
                   onChange={(value) => handleInputChange('quota', value)}
                   value={quota}
                   type={'number'}
                   autoComplete='new-password'
                 />
-                <Button onClick={openAddQuotaModal}>{t('添加额度')}</Button>
+                <Button onClick={openAddQuotaModal}>{t('Добавить квоту')}</Button>
               </Space>
             </>
           )}
-          <Divider style={{ marginTop: 20 }}>{t('以下信息不可修改')}</Divider>
+          <Divider style={{ marginTop: 20 }}>{t('Следующая информация не может быть изменена')}</Divider>
           <div style={{ marginTop: 20 }}>
-            <Typography.Text>{t('已绑定的 GitHub 账户')}</Typography.Text>
+            <Typography.Text>{t('Связанный аккаунт GitHub')}</Typography.Text>
           </div>
           <Input
             name='github_id'
             value={github_id}
             autoComplete='new-password'
             placeholder={t(
-              '此项只读，需要用户通过个人设置页面的相关绑定按钮进行绑定，不可直接修改',
+              'Только для чтения. Пользователь должен связать через соответствующую кнопку на странице личных настроек. Изменение невозможно.'
             )}
             readonly
           />
           <div style={{ marginTop: 20 }}>
-            <Typography.Text>{t('已绑定的 OIDC 账户')}</Typography.Text>
+            <Typography.Text>{t('Связанный аккаунт OIDC')}</Typography.Text>
           </div>
           <Input
             name='oidc_id'
             value={oidc_id}
             placeholder={t(
-              '此项只读，需要用户通过个人设置页面的相关绑定按钮进行绑定，不可直接修改',
+              'Только для чтения. Пользователь должен связать через соответствующую кнопку на странице личных настроек. Изменение невозможно.'
             )}
             readonly
           />
           <div style={{ marginTop: 20 }}>
-            <Typography.Text>{t('已绑定的微信账户')}</Typography.Text>
+            <Typography.Text>{t('Связанный аккаунт WeChat')}</Typography.Text>
           </div>
           <Input
             name='wechat_id'
             value={wechat_id}
             autoComplete='new-password'
             placeholder={t(
-              '此项只读，需要用户通过个人设置页面的相关绑定按钮进行绑定，不可直接修改',
+              'Только для чтения. Пользователь должен связать через соответствующую кнопку на странице личных настроек. Изменение невозможно.'
             )}
             readonly
           />
           <div style={{ marginTop: 20 }}>
-            <Typography.Text>{t('已绑定的邮箱账户')}</Typography.Text>
+            <Typography.Text>{t('Связанный email-аккаунт')}</Typography.Text>
           </div>
           <Input
             name='email'
             value={email}
             autoComplete='new-password'
             placeholder={t(
-              '此项只读，需要用户通过个人设置页面的相关绑定按钮进行绑定，不可直接修改',
+              'Только для чтения. Пользователь должен связать через соответствующую кнопку на странице личных настроек. Изменение невозможно.'
             )}
             readonly
           />
           <div style={{ marginTop: 20 }}>
-            <Typography.Text>{t('已绑定的Telegram账户')}</Typography.Text>
+            <Typography.Text>{t('Связанный аккаунт Telegram')}</Typography.Text>
           </div>
           <Input
             name='telegram_id'
             value={telegram_id}
             autoComplete='new-password'
             placeholder={t(
-              '此项只读，需要用户通过个人设置页面的相关绑定按钮进行绑定，不可直接修改',
+              'Только для чтения. Пользователь должен связать через соответствующую кнопку на странице личных настроек. Изменение невозможно.'
             )}
             readonly
           />
@@ -298,11 +298,11 @@ const EditUser = (props) => {
         closable={null}
       >
         <div style={{ marginTop: 20 }}>
-          <Typography.Text>{`${t('新额度')}${renderQuota(quota)} + ${renderQuota(addQuotaLocal)} = ${renderQuota(quota + parseInt(addQuotaLocal))}`}</Typography.Text>
+          <Typography.Text>{`${t('Новая квота')}${renderQuota(quota)} + ${renderQuota(addQuotaLocal)} = ${renderQuota(quota + parseInt(addQuotaLocal))}`}</Typography.Text>
         </div>
         <Input
           name='addQuotaLocal'
-          placeholder={t('需要添加的额度（支持负数）')}
+          placeholder={t('Квота для добавления (поддерживаются отрицательные значения)')}
           onChange={(value) => {
             setAddQuotaLocal(value);
           }}

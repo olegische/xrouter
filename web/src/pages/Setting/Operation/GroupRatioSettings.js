@@ -27,7 +27,7 @@ export default function GroupRatioSettings(props) {
         .then(() => {
           const updateArray = compareObjects(inputs, inputsRow);
           if (!updateArray.length)
-            return showWarning(t('你似乎并没有修改什么'));
+            return showWarning(t('Похоже, вы ничего не изменили'));
 
           const requestQueue = updateArray.map((item) => {
             const value =
@@ -43,8 +43,8 @@ export default function GroupRatioSettings(props) {
               if (res.includes(undefined)) {
                 return showError(
                   requestQueue.length > 1
-                    ? t('部分保存失败，请重试')
-                    : t('保存失败'),
+                    ? t('Частично не удалось сохранить, попробуйте снова')
+                    : t('Не удалось сохранить'),
                 );
               }
 
@@ -54,22 +54,22 @@ export default function GroupRatioSettings(props) {
                 }
               }
 
-              showSuccess(t('保存成功'));
+              showSuccess(t('Успешно сохранено'));
               props.refresh();
             })
             .catch((error) => {
               console.error('Unexpected error:', error);
-              showError(t('保存失败，请重试'));
+              showError(t('Не удалось сохранить, попробуйте снова'));
             })
             .finally(() => {
               setLoading(false);
             });
         })
         .catch(() => {
-          showError(t('请检查输入'));
+          showError(t('Проверьте введённые данные'));
         });
     } catch (error) {
-      showError(t('请检查输入'));
+      showError(t('Проверьте введённые данные'));
       console.error(error);
     }
   }
@@ -93,12 +93,12 @@ export default function GroupRatioSettings(props) {
         getFormApi={(formAPI) => (refForm.current = formAPI)}
         style={{ marginBottom: 15 }}
       >
-        <Form.Section text={t('分组设置')}>
+        <Form.Section text={t('Настройки групп')}>
           <Row gutter={16}>
             <Col xs={24} sm={16}>
               <Form.TextArea
-                label={t('分组倍率')}
-                placeholder={t('为一个 JSON 文本，键为分组名称，值为倍率')}
+                label={t('Коэффициенты групп')}
+                placeholder={t('JSON-текст, где ключ — имя группы, значение — коэффициент')}
                 field={'GroupRatio'}
                 autosize={{ minRows: 6, maxRows: 12 }}
                 trigger='blur'
@@ -106,7 +106,7 @@ export default function GroupRatioSettings(props) {
                 rules={[
                   {
                     validator: (rule, value) => verifyJSON(value),
-                    message: t('不是合法的 JSON 字符串'),
+                    message: t('Недопустимая строка JSON'),
                   },
                 ]}
                 onChange={(value) =>
@@ -118,8 +118,8 @@ export default function GroupRatioSettings(props) {
           <Row gutter={16}>
             <Col xs={24} sm={16}>
               <Form.TextArea
-                label={t('用户可选分组')}
-                placeholder={t('为一个 JSON 文本，键为分组名称，值为分组描述')}
+                label={t('Доступные пользователю группы')}
+                placeholder={t('JSON-текст, где ключ — имя группы, значение — описание группы')}
                 field={'UserUsableGroups'}
                 autosize={{ minRows: 6, maxRows: 12 }}
                 trigger='blur'
@@ -127,7 +127,7 @@ export default function GroupRatioSettings(props) {
                 rules={[
                   {
                     validator: (rule, value) => verifyJSON(value),
-                    message: t('不是合法的 JSON 字符串'),
+                    message: t('Недопустимая строка JSON'),
                   },
                 ]}
                 onChange={(value) =>
@@ -138,7 +138,7 @@ export default function GroupRatioSettings(props) {
           </Row>
         </Form.Section>
       </Form>
-      <Button onClick={onSubmit}>{t('保存分组倍率设置')}</Button>
+      <Button onClick={onSubmit}>{t('Сохранить настройки коэффициентов групп')}</Button>
     </Spin>
   );
 }

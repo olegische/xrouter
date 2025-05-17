@@ -21,13 +21,13 @@ const AddUser = (props) => {
     setLoading(true);
     if (inputs.username === '' || inputs.password === '') {
       setLoading(false);
-      showError('用户名和密码不能为空！');
+      showError('Имя пользователя и пароль не могут быть пустыми!');
       return;
     }
     const res = await API.post(`/api/user/`, inputs);
     const { success, message } = res.data;
     if (success) {
-      showSuccess('用户账户创建成功！');
+      showSuccess('Учетная запись пользователя успешно создана!');
       setInputs(originInputs);
       props.refresh();
       props.handleClose();
@@ -45,7 +45,7 @@ const AddUser = (props) => {
     <>
       <SideSheet
         placement={'left'}
-        title={<Title level={3}>{'添加用户'}</Title>}
+        title={<Title level={3}>{'Добавить пользователя'}</Title>}
         headerStyle={{ borderBottom: '1px solid var(--semi-color-border)' }}
         bodyStyle={{ borderBottom: '1px solid var(--semi-color-border)' }}
         visible={props.visible}
@@ -53,7 +53,7 @@ const AddUser = (props) => {
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
             <Space>
               <Button theme='solid' size={'large'} onClick={submit}>
-                提交
+                Отправить
               </Button>
               <Button
                 theme='solid'
@@ -61,7 +61,7 @@ const AddUser = (props) => {
                 type={'tertiary'}
                 onClick={handleCancel}
               >
-                取消
+                Отмена
               </Button>
             </Space>
           </div>
@@ -73,31 +73,31 @@ const AddUser = (props) => {
         <Spin spinning={loading}>
           <Input
             style={{ marginTop: 20 }}
-            label='用户名'
+            label='Имя пользователя'
             name='username'
-            addonBefore={'用户名'}
-            placeholder={'请输入用户名'}
+            addonBefore={'Имя пользователя'}
+            placeholder={'Пожалуйста, введите имя пользователя'}
             onChange={(value) => handleInputChange('username', value)}
             value={username}
             autoComplete='off'
           />
           <Input
             style={{ marginTop: 20 }}
-            addonBefore={'显示名'}
-            label='显示名称'
+            addonBefore={'Отображаемое имя'}
+            label='Отображаемое имя'
             name='display_name'
             autoComplete='off'
-            placeholder={'请输入显示名称'}
+            placeholder={'Пожалуйста, введите отображаемое имя'}
             onChange={(value) => handleInputChange('display_name', value)}
             value={display_name}
           />
           <Input
             style={{ marginTop: 20 }}
-            label='密 码'
+            label='Пароль'
             name='password'
             type={'password'}
-            addonBefore={'密码'}
-            placeholder={'请输入密码'}
+            addonBefore={'Пароль'}
+            placeholder={'Пожалуйста, введите пароль'}
             onChange={(value) => handleInputChange('password', value)}
             value={password}
             autoComplete='off'

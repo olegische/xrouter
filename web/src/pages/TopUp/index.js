@@ -40,7 +40,7 @@ const TopUp = () => {
 
   const topUp = async () => {
     if (redemptionCode === '') {
-      showInfo(t('请输入兑换码！'));
+      showInfo(t('Пожалуйста, введите код обмена!'));
       return;
     }
     setIsSubmitting(true);
@@ -50,10 +50,10 @@ const TopUp = () => {
       });
       const { success, message, data } = res.data;
       if (success) {
-        showSuccess(t('兑换成功！'));
+        showSuccess(t('Обмен прошёл успешно!'));
         Modal.success({
-          title: t('兑换成功！'),
-          content: t('成功兑换额度：') + renderQuota(data),
+          title: t('Обмен прошёл успешно!'),
+          content: t('Успешно обменено:') + renderQuota(data),
           centered: true,
         });
         setUserQuota((quota) => {
@@ -64,7 +64,7 @@ const TopUp = () => {
         showError(message);
       }
     } catch (err) {
-      showError(t('请求失败'));
+      showError(t('Запрос не удался'));
     } finally {
       setIsSubmitting(false);
     }
@@ -72,7 +72,7 @@ const TopUp = () => {
 
   const openTopUpLink = () => {
     if (!topUpLink) {
-      showError(t('超级管理员未设置充值链接！'));
+      showError(t('Суперадминистратор не установил ссылку для пополнения!'));
       return;
     }
     window.open(topUpLink, '_blank');
@@ -80,12 +80,12 @@ const TopUp = () => {
 
   const preTopUp = async (payment) => {
     if (!enableOnlineTopUp) {
-      showError(t('管理员未开启在线充值！'));
+      showError(t('Администратор не включил онлайн-пополнение!'));
       return;
     }
     await getAmount();
     if (topUpCount < minTopUp) {
-      showError(t('充值数量不能小于') + minTopUp);
+      showError(t('Сумма пополнения не может быть меньше ') + minTopUp);
       return;
     }
     setPayWay(payment);
@@ -97,7 +97,7 @@ const TopUp = () => {
       await getAmount();
     }
     if (topUpCount < minTopUp) {
-      showError('充值数量不能小于' + minTopUp);
+      showError('Сумма пополнения не может быть меньше ' + minTopUp);
       return;
     }
     setOpen(false);
@@ -176,7 +176,7 @@ const TopUp = () => {
 
   const renderAmount = () => {
     // console.log(amount);
-    return amount + ' ' + t('元');
+    return amount + ' ' + t('юань');
   };
 
   const getAmount = async (value) => {
@@ -195,7 +195,7 @@ const TopUp = () => {
           setAmount(parseFloat(data));
         } else {
           setAmount(0);
-          Toast.error({ content: '错误：' + data, id: 'getAmount' });
+          Toast.error({ content: 'Ошибка: ' + data, id: 'getAmount' });
           // setTopUpCount(parseInt(res.data.count));
           // setAmount(parseInt(data));
         }
@@ -216,11 +216,11 @@ const TopUp = () => {
     <div>
       <Layout>
         <Layout.Header>
-          <h3>{t('我的钱包')}</h3>
+          <h3>{t('Мой кошелёк')}</h3>
         </Layout.Header>
         <Layout.Content>
           <Modal
-            title={t('确定要充值吗')}
+            title={t('Вы уверены, что хотите пополнить?')}
             visible={open}
             onOk={onlineTopUp}
             onCancel={handleCancel}
@@ -229,27 +229,27 @@ const TopUp = () => {
             centered={true}
           >
             <p>
-              {t('充值数量')}：{topUpCount}
+              {t('Сумма пополнения')}：{topUpCount}
             </p>
             <p>
-              {t('实付金额')}：{renderAmount()}
+              {t('Фактическая сумма к оплате')}：{renderAmount()}
             </p>
-            <p>{t('是否确认充值？')}</p>
+            <p>{t('Подтвердить пополнение?')}</p>
           </Modal>
           <div
             style={{ marginTop: 20, display: 'flex', justifyContent: 'center' }}
           >
             <Card style={{ width: '500px', padding: '20px' }}>
               <Title level={3} style={{ textAlign: 'center' }}>
-                {t('余额')} {renderQuota(userQuota)}
+                {t('Баланс')} {renderQuota(userQuota)}
               </Title>
               <div style={{ marginTop: 20 }}>
-                <Divider>{t('兑换余额')}</Divider>
+                <Divider>{t('Обмен баланса')}</Divider>
                 <Form>
                   <Form.Input
                     field={'redemptionCode'}
-                    label={t('兑换码')}
-                    placeholder={t('兑换码')}
+                    label={t('Код обмена')}
+                    placeholder={t('Код обмена')}
                     name='redemptionCode'
                     value={redemptionCode}
                     onChange={(value) => {
@@ -263,7 +263,7 @@ const TopUp = () => {
                         theme={'solid'}
                         onClick={openTopUpLink}
                       >
-                        {t('获取兑换码')}
+                        {t('Получить код обмена')}
                       </Button>
                     ) : null}
                     <Button
@@ -272,20 +272,20 @@ const TopUp = () => {
                       onClick={topUp}
                       disabled={isSubmitting}
                     >
-                      {isSubmitting ? t('兑换中...') : t('兑换')}
+                      {isSubmitting ? t('Обмен...') : t('Обмен')}
                     </Button>
                   </Space>
                 </Form>
               </div>
               <div style={{ marginTop: 20 }}>
-                <Divider>{t('在线充值')}</Divider>
+                <Divider>{t('Онлайн пополнение')}</Divider>
                 <Form>
                   <Form.Input
                     disabled={!enableOnlineTopUp}
                     field={'redemptionCount'}
-                    label={t('实付金额：') + ' ' + renderAmount()}
+                    label={t('Фактическая сумма к оплате:') + ' ' + renderAmount()}
                     placeholder={
-                      t('充值数量，最低 ') + renderQuotaWithAmount(minTopUp)
+                      t('Сумма пополнения, минимум ') + renderQuotaWithAmount(minTopUp)
                     }
                     name='redemptionCount'
                     type={'number'}
@@ -306,7 +306,7 @@ const TopUp = () => {
                         preTopUp('zfb');
                       }}
                     >
-                      {t('支付宝')}
+                      {t('Alipay')}
                     </Button>
                     <Button
                       style={{
@@ -318,7 +318,7 @@ const TopUp = () => {
                         preTopUp('wx');
                       }}
                     >
-                      {t('微信')}
+                      {t('WeChat')}
                     </Button>
                   </Space>
                 </Form>

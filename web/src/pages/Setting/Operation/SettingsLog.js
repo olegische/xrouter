@@ -26,7 +26,7 @@ export default function SettingsLog(props) {
       (item) => item.key !== 'historyTimestamp',
     );
 
-    if (!updateArray.length) return showWarning(t('你似乎并没有修改什么'));
+    if (!updateArray.length) return showWarning(t('Похоже, вы ничего не изменили'));
     const requestQueue = updateArray.map((item) => {
       let value = '';
       if (typeof inputs[item.key] === 'boolean') {
@@ -46,13 +46,13 @@ export default function SettingsLog(props) {
           if (res.includes(undefined)) return;
         } else if (requestQueue.length > 1) {
           if (res.includes(undefined))
-            return showError(t('部分保存失败，请重试'));
+            return showError(t('Частично не удалось сохранить, попробуйте снова'));
         }
-        showSuccess(t('保存成功'));
+        showSuccess(t('Успешно сохранено'));
         props.refresh();
       })
       .catch(() => {
-        showError(t('保存失败，请重试'));
+        showError(t('Не удалось сохранить, попробуйте снова'));
       })
       .finally(() => {
         setLoading(false);
@@ -61,16 +61,16 @@ export default function SettingsLog(props) {
   async function onCleanHistoryLog() {
     try {
       setLoadingCleanHistoryLog(true);
-      if (!inputs.historyTimestamp) throw new Error(t('请选择日志记录时间'));
+      if (!inputs.historyTimestamp) throw new Error(t('Пожалуйста, выберите время для очистки логов'));
       const res = await API.delete(
         `/api/log/?target_timestamp=${Date.parse(inputs.historyTimestamp) / 1000}`,
       );
       const { success, message, data } = res.data;
       if (success) {
-        showSuccess(`${data} ${t('条日志已清理！')}`);
+        showSuccess(`${data} ${t('логов было очищено!')}`);
         return;
       } else {
-        throw new Error(t('日志清理失败：') + message);
+        throw new Error(t('Не удалось очистить логи:') + message);
       }
     } catch (error) {
       showError(error.message);
@@ -99,12 +99,12 @@ export default function SettingsLog(props) {
           getFormApi={(formAPI) => (refForm.current = formAPI)}
           style={{ marginBottom: 15 }}
         >
-          <Form.Section text={t('日志设置')}>
+          <Form.Section text={t('Настройки логов')}>
             <Row gutter={16}>
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.Switch
                   field={'LogConsumeEnabled'}
-                  label={t('启用额度消费日志记录')}
+                  label={t('Включить запись логов по расходу лимита')}
                   size='default'
                   checkedText='｜'
                   uncheckedText='〇'
@@ -119,7 +119,7 @@ export default function SettingsLog(props) {
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Spin spinning={loadingCleanHistoryLog}>
                   <Form.DatePicker
-                    label={t('日志记录时间')}
+                    label={t('Время лога')}
                     field={'historyTimestamp'}
                     type='dateTime'
                     inputReadOnly={true}
@@ -131,7 +131,7 @@ export default function SettingsLog(props) {
                     }}
                   />
                   <Button size='default' onClick={onCleanHistoryLog}>
-                    {t('清除历史日志')}
+                    {t('Очистить историю логов')}
                   </Button>
                 </Spin>
               </Col>
@@ -139,7 +139,7 @@ export default function SettingsLog(props) {
 
             <Row>
               <Button size='default' onClick={onSubmit}>
-                {t('保存日志设置')}
+                {t('Сохранить настройки логов')}
               </Button>
             </Row>
           </Form.Section>

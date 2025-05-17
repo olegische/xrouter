@@ -42,7 +42,7 @@ export default function SettingClaudeModel(props) {
 
   function onSubmit() {
     const updateArray = compareObjects(inputs, inputsRow);
-    if (!updateArray.length) return showWarning(t('你似乎并没有修改什么'));
+    if (!updateArray.length) return showWarning(t('Похоже, вы ничего не изменили'));
     const requestQueue = updateArray.map((item) => {
       let value = String(inputs[item.key]);
 
@@ -58,13 +58,13 @@ export default function SettingClaudeModel(props) {
           if (res.includes(undefined)) return;
         } else if (requestQueue.length > 1) {
           if (res.includes(undefined))
-            return showError(t('部分保存失败，请重试'));
+            return showError(t('Частично не удалось сохранить, попробуйте снова'));
         }
-        showSuccess(t('保存成功'));
+        showSuccess(t('Успешно сохранено'));
         props.refresh();
       })
       .catch(() => {
-        showError(t('保存失败，请重试'));
+        showError(t('Не удалось сохранить, попробуйте снова'));
       })
       .finally(() => {
         setLoading(false);
@@ -91,19 +91,19 @@ export default function SettingClaudeModel(props) {
           getFormApi={(formAPI) => (refForm.current = formAPI)}
           style={{ marginBottom: 15 }}
         >
-          <Form.Section text={t('Claude设置')}>
+          <Form.Section text={t('Настройки Claude')}>
             <Row>
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.TextArea
-                  label={t('Claude请求头覆盖')}
+                  label={t('Переопределение заголовков Claude')}
                   field={'claude.model_headers_settings'}
                   placeholder={
-                    t('为一个 JSON 文本，例如：') +
+                    t('JSON-текст, например:') +
                     '\n' +
                     JSON.stringify(CLAUDE_HEADER, null, 2)
                   }
                   extraText={
-                    t('示例') + '\n' + JSON.stringify(CLAUDE_HEADER, null, 2)
+                    t('Пример') + '\n' + JSON.stringify(CLAUDE_HEADER, null, 2)
                   }
                   autosize={{ minRows: 6, maxRows: 12 }}
                   trigger='blur'
@@ -111,7 +111,7 @@ export default function SettingClaudeModel(props) {
                   rules={[
                     {
                       validator: (rule, value) => verifyJSON(value),
-                      message: t('不是合法的 JSON 字符串'),
+                      message: t('Недопустимая строка JSON'),
                     },
                   ]}
                   onChange={(value) =>
@@ -126,15 +126,15 @@ export default function SettingClaudeModel(props) {
             <Row>
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.TextArea
-                  label={t('缺省 MaxTokens')}
+                  label={t('MaxTokens по умолчанию')}
                   field={'claude.default_max_tokens'}
                   placeholder={
-                    t('为一个 JSON 文本，例如：') +
+                    t('JSON-текст, например:') +
                     '\n' +
                     JSON.stringify(CLAUDE_DEFAULT_MAX_TOKENS, null, 2)
                   }
                   extraText={
-                    t('示例') +
+                    t('Пример') +
                     '\n' +
                     JSON.stringify(CLAUDE_DEFAULT_MAX_TOKENS, null, 2)
                   }
@@ -144,7 +144,7 @@ export default function SettingClaudeModel(props) {
                   rules={[
                     {
                       validator: (rule, value) => verifyJSON(value),
-                      message: t('不是合法的 JSON 字符串'),
+                      message: t('Недопустимая строка JSON'),
                     },
                   ]}
                   onChange={(value) =>
@@ -156,7 +156,7 @@ export default function SettingClaudeModel(props) {
             <Row>
               <Col span={16}>
                 <Form.Switch
-                  label={t('启用Claude思考适配（-thinking后缀）')}
+                  label={t('Включить Claude thinking adapter (суффикс -thinking)')}
                   field={'claude.thinking_adapter_enabled'}
                   onChange={(value) =>
                     setInputs({
@@ -172,7 +172,7 @@ export default function SettingClaudeModel(props) {
                 {/*//展示MaxTokens和BudgetTokens的计算公式, 并展示实际数字*/}
                 <Text>
                   {t(
-                    'Claude思考适配 BudgetTokens = MaxTokens * BudgetTokens 百分比',
+                    'Claude thinking adapter BudgetTokens = MaxTokens * процент BudgetTokens',
                   )}
                 </Text>
               </Col>
@@ -180,10 +180,10 @@ export default function SettingClaudeModel(props) {
             <Row>
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.InputNumber
-                  label={t('思考适配 BudgetTokens 百分比')}
+                  label={t('Процент BudgetTokens для thinking adapter')}
                   field={'claude.thinking_adapter_budget_tokens_percentage'}
                   initValue={''}
-                  extraText={t('0.1-1之间的小数')}
+                  extraText={t('Дробное число от 0.1 до 1')}
                   min={0.1}
                   max={1}
                   onChange={(value) =>
@@ -198,7 +198,7 @@ export default function SettingClaudeModel(props) {
 
             <Row>
               <Button size='default' onClick={onSubmit}>
-                {t('保存')}
+                {t('Сохранить')}
               </Button>
             </Row>
           </Form.Section>

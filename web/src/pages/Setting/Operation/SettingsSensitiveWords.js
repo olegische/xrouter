@@ -22,7 +22,7 @@ export default function SettingsSensitiveWords(props) {
 
   function onSubmit() {
     const updateArray = compareObjects(inputs, inputsRow);
-    if (!updateArray.length) return showWarning(t('你似乎并没有修改什么'));
+    if (!updateArray.length) return showWarning(t('Похоже, вы ничего не изменили'));
     const requestQueue = updateArray.map((item) => {
       let value = '';
       if (typeof inputs[item.key] === 'boolean') {
@@ -42,13 +42,13 @@ export default function SettingsSensitiveWords(props) {
           if (res.includes(undefined)) return;
         } else if (requestQueue.length > 1) {
           if (res.includes(undefined))
-            return showError(t('部分保存失败，请重试'));
+            return showError(t('Частично не удалось сохранить, попробуйте снова'));
         }
-        showSuccess(t('保存成功'));
+        showSuccess(t('Успешно сохранено'));
         props.refresh();
       })
       .catch(() => {
-        showError(t('保存失败，请重试'));
+        showError(t('Не удалось сохранить, попробуйте снова'));
       })
       .finally(() => {
         setLoading(false);
@@ -74,12 +74,12 @@ export default function SettingsSensitiveWords(props) {
           getFormApi={(formAPI) => (refForm.current = formAPI)}
           style={{ marginBottom: 15 }}
         >
-          <Form.Section text={t('屏蔽词过滤设置')}>
+          <Form.Section text={t('Настройки фильтрации стоп-слов')}>
             <Row gutter={16}>
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.Switch
                   field={'CheckSensitiveEnabled'}
-                  label={t('启用屏蔽词过滤功能')}
+                  label={t('Включить фильтрацию стоп-слов')}
                   size='default'
                   checkedText='｜'
                   uncheckedText='〇'
@@ -94,7 +94,7 @@ export default function SettingsSensitiveWords(props) {
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.Switch
                   field={'CheckSensitiveOnPromptEnabled'}
-                  label={t('启用 Prompt 检查')}
+                  label={t('Включить проверку Prompt')}
                   size='default'
                   checkedText='｜'
                   uncheckedText='〇'
@@ -110,9 +110,9 @@ export default function SettingsSensitiveWords(props) {
             <Row>
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.TextArea
-                  label={t('屏蔽词列表')}
-                  extraText={t('一行一个屏蔽词，不需要符号分割')}
-                  placeholder={t('一行一个屏蔽词，不需要符号分割')}
+                  label={t('Список стоп-слов')}
+                  extraText={t('По одному стоп-слову в строке, без разделителей')}
+                  placeholder={t('По одному стоп-слову в строке, без разделителей')}
                   field={'SensitiveWords'}
                   onChange={(value) =>
                     setInputs({
@@ -127,7 +127,7 @@ export default function SettingsSensitiveWords(props) {
             </Row>
             <Row>
               <Button size='default' onClick={onSubmit}>
-                {t('保存屏蔽词过滤设置')}
+                {t('Сохранить настройки фильтрации стоп-слов')}
               </Button>
             </Row>
           </Form.Section>

@@ -44,7 +44,7 @@ export default function GeneralSettings(props) {
 
   function onSubmit() {
     const updateArray = compareObjects(inputs, inputsRow);
-    if (!updateArray.length) return showWarning(t('你似乎并没有修改什么'));
+    if (!updateArray.length) return showWarning(t('Похоже, вы ничего не изменили'));
     const requestQueue = updateArray.map((item) => {
       let value = '';
       if (typeof inputs[item.key] === 'boolean') {
@@ -64,13 +64,13 @@ export default function GeneralSettings(props) {
           if (res.includes(undefined)) return;
         } else if (requestQueue.length > 1) {
           if (res.includes(undefined))
-            return showError(t('部分保存失败，请重试'));
+            return showError(t('Частично не удалось сохранить, попробуйте снова'));
         }
-        showSuccess(t('保存成功'));
+        showSuccess(t('Успешно сохранено'));
         props.refresh();
       })
       .catch(() => {
-        showError(t('保存失败，请重试'));
+        showError(t('Не удалось сохранить, попробуйте снова'));
       })
       .finally(() => {
         setLoading(false);
@@ -94,21 +94,21 @@ export default function GeneralSettings(props) {
       <Spin spinning={loading}>
         <Banner
           type='warning'
-          description={t('聊天链接功能已经弃用，请使用下方聊天设置功能')}
+          description={t('Функция ссылки на чат устарела, используйте настройки чата ниже')}
         />
         <Form
           values={inputs}
           getFormApi={(formAPI) => (refForm.current = formAPI)}
           style={{ marginBottom: 15 }}
         >
-          <Form.Section text={t('通用设置')}>
+          <Form.Section text={t('Общие настройки')}>
             <Row gutter={16}>
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.Input
                   field={'TopUpLink'}
-                  label={t('充值链接')}
+                  label={t('Ссылка для пополнения')}
                   initValue={''}
-                  placeholder={t('例如发卡网站的购买链接')}
+                  placeholder={t('Например, ссылка на сайт продажи карт')}
                   onChange={handleFieldChange('TopUpLink')}
                   showClear
                 />
@@ -116,9 +116,9 @@ export default function GeneralSettings(props) {
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.Input
                   field={'general_setting.docs_link'}
-                  label={t('文档地址')}
+                  label={t('Адрес документации')}
                   initValue={''}
-                  placeholder={t('例如 https://docs.newapi.pro')}
+                  placeholder={t('Например, https://docs.newapi.pro')}
                   onChange={handleFieldChange('general_setting.docs_link')}
                   showClear
                 />
@@ -126,9 +126,9 @@ export default function GeneralSettings(props) {
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.Input
                   field={'QuotaPerUnit'}
-                  label={t('单位美元额度')}
+                  label={t('Лимит в долларах за единицу')}
                   initValue={''}
-                  placeholder={t('一单位货币能兑换的额度')}
+                  placeholder={t('Сколько лимита можно получить за одну единицу валюты')}
                   onChange={handleFieldChange('QuotaPerUnit')}
                   showClear
                   onClick={() => setShowQuotaWarning(true)}
@@ -137,9 +137,9 @@ export default function GeneralSettings(props) {
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.Input
                   field={'RetryTimes'}
-                  label={t('失败重试次数')}
+                  label={t('Количество попыток при ошибке')}
                   initValue={''}
-                  placeholder={t('失败重试次数')}
+                  placeholder={t('Количество попыток при ошибке')}
                   onChange={handleFieldChange('RetryTimes')}
                   showClear
                 />
@@ -149,7 +149,7 @@ export default function GeneralSettings(props) {
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.Switch
                   field={'DisplayInCurrencyEnabled'}
-                  label={t('以货币形式显示额度')}
+                  label={t('Показывать лимит в валюте')}
                   size='default'
                   checkedText='｜'
                   uncheckedText='〇'
@@ -159,7 +159,7 @@ export default function GeneralSettings(props) {
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.Switch
                   field={'DisplayTokenStatEnabled'}
-                  label={t('额度查询接口返回令牌额度而非用户额度')}
+                  label={t('Интерфейс проверки лимита возвращает лимит токена, а не пользователя')}
                   size='default'
                   checkedText='｜'
                   uncheckedText='〇'
@@ -169,7 +169,7 @@ export default function GeneralSettings(props) {
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.Switch
                   field={'DefaultCollapseSidebar'}
-                  label={t('默认折叠侧边栏')}
+                  label={t('По умолчанию сворачивать боковую панель')}
                   size='default'
                   checkedText='｜'
                   uncheckedText='〇'
@@ -181,7 +181,7 @@ export default function GeneralSettings(props) {
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.Switch
                   field={'DemoSiteEnabled'}
-                  label={t('演示站点模式')}
+                  label={t('Демонстрационный режим')}
                   size='default'
                   checkedText='｜'
                   uncheckedText='〇'
@@ -191,8 +191,8 @@ export default function GeneralSettings(props) {
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.Switch
                   field={'SelfUseModeEnabled'}
-                  label={t('自用模式')}
-                  extraText={t('开启后不限制：必须设置模型倍率')}
+                  label={t('Режим личного использования')}
+                  extraText={t('После включения не требуется: обязательно устанавливать коэффициенты модели')}
                   size='default'
                   checkedText='｜'
                   uncheckedText='〇'
@@ -202,7 +202,7 @@ export default function GeneralSettings(props) {
             </Row>
             <Row>
               <Button size='default' onClick={onSubmit}>
-                {t('保存通用设置')}
+                {t('Сохранить общие настройки')}
               </Button>
             </Row>
           </Form.Section>
@@ -210,7 +210,7 @@ export default function GeneralSettings(props) {
       </Spin>
 
       <Modal
-        title={t('警告')}
+        title={t('Внимание')}
         visible={showQuotaWarning}
         onOk={() => setShowQuotaWarning(false)}
         onCancel={() => setShowQuotaWarning(false)}
@@ -220,7 +220,7 @@ export default function GeneralSettings(props) {
         <Banner
           type='warning'
           description={t(
-            '此设置用于系统内部计算，默认值500000是为了精确到6位小数点设计，不推荐修改。',
+            'Этот параметр используется для внутренних расчетов системы, значение по умолчанию 500000 выбрано для точности до 6 знаков после запятой, не рекомендуется изменять.',
           )}
           bordered
           fullMode={false}

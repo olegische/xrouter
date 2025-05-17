@@ -38,7 +38,7 @@ export default function SettingsChats(props) {
           console.log('Validation passed');
           const updateArray = compareObjects(inputs, inputsRow);
           if (!updateArray.length)
-            return showWarning(t('你似乎并没有修改什么'));
+            return showWarning(t('Похоже, вы ничего не изменили'));
           const requestQueue = updateArray.map((item) => {
             let value = '';
             if (typeof inputs[item.key] === 'boolean') {
@@ -58,13 +58,13 @@ export default function SettingsChats(props) {
                 if (res.includes(undefined)) return;
               } else if (requestQueue.length > 1) {
                 if (res.includes(undefined))
-                  return showError(t('部分保存失败，请重试'));
+                  return showError(t('Частично не удалось сохранить, попробуйте снова'));
               }
-              showSuccess(t('保存成功'));
+              showSuccess(t('Успешно сохранено'));
               props.refresh();
             })
             .catch(() => {
-              showError(t('保存失败，请重试'));
+              showError(t('Не удалось сохранить, попробуйте снова'));
             })
             .finally(() => {
               setLoading(false);
@@ -72,10 +72,10 @@ export default function SettingsChats(props) {
         })
         .catch((error) => {
           console.error('Validation failed:', error);
-          showError(t('请检查输入'));
+          showError(t('Проверьте введённые данные'));
         });
     } catch (error) {
-      showError(t('请检查输入'));
+      showError(t('Проверьте введённые данные'));
       console.error(error);
     }
   }
@@ -119,23 +119,23 @@ export default function SettingsChats(props) {
         getFormApi={(formAPI) => (refForm.current = formAPI)}
         style={{ marginBottom: 15 }}
       >
-        <Form.Section text={t('令牌聊天设置')}>
+        <Form.Section text={t('Настройки чата токена')}>
           <Banner
             type='warning'
             description={t(
-              '必须将上方聊天链接全部设置为空，才能使用下方聊天设置功能',
+              'Чтобы использовать функцию настройки чата ниже, необходимо очистить все ссылки на чаты выше.',
             )}
           />
           <Banner
             type='info'
             description={t(
-              '链接中的{key}将自动替换为sk-xxxx，{address}将自动替换为系统设置的服务器地址，末尾不带/和/v1',
+              'В ссылке {key} будет автоматически заменено на sk-xxxx, {address} — на адрес сервера из системных настроек, без / и /v1 в конце.',
             )}
           />
           <Form.TextArea
-            label={t('聊天配置')}
+            label={t('Конфигурация чата')}
             extraText={''}
-            placeholder={t('为一个 JSON 文本')}
+            placeholder={t('JSON-текст')}
             field={'Chats'}
             autosize={{ minRows: 6, maxRows: 12 }}
             trigger='blur'
@@ -145,7 +145,7 @@ export default function SettingsChats(props) {
                 validator: (rule, value) => {
                   return verifyJSON(value);
                 },
-                message: t('不是合法的 JSON 字符串'),
+                message: t('Недопустимая строка JSON'),
               },
             ]}
             onChange={(value) =>
@@ -158,7 +158,7 @@ export default function SettingsChats(props) {
         </Form.Section>
       </Form>
       <Space>
-        <Button onClick={onSubmit}>{t('保存聊天设置')}</Button>
+        <Button onClick={onSubmit}>{t('Сохранить настройки чата')}</Button>
       </Space>
     </Spin>
   );

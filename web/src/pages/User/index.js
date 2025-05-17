@@ -9,7 +9,7 @@ const User = () => {
     <>
       <Layout>
         <Layout.Header>
-          <h3>{t('管理用户')}</h3>
+          <h3>{t('Управление пользователями')}</h3>
         </Layout.Header>
         <Layout.Content>
           <UsersTable />

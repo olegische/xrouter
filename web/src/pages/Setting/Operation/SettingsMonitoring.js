@@ -25,7 +25,7 @@ export default function SettingsMonitoring(props) {
 
   function onSubmit() {
     const updateArray = compareObjects(inputs, inputsRow);
-    if (!updateArray.length) return showWarning(t('你似乎并没有修改什么'));
+    if (!updateArray.length) return showWarning(t('Похоже, вы ничего не изменили'));
     const requestQueue = updateArray.map((item) => {
       let value = '';
       if (typeof inputs[item.key] === 'boolean') {
@@ -45,13 +45,13 @@ export default function SettingsMonitoring(props) {
           if (res.includes(undefined)) return;
         } else if (requestQueue.length > 1) {
           if (res.includes(undefined))
-            return showError(t('部分保存失败，请重试'));
+            return showError(t('Частично не удалось сохранить, попробуйте снова'));
         }
-        showSuccess(t('保存成功'));
+        showSuccess(t('Успешно сохранено'));
         props.refresh();
       })
       .catch(() => {
-        showError(t('保存失败，请重试'));
+        showError(t('Не удалось сохранить, попробуйте снова'));
       })
       .finally(() => {
         setLoading(false);
@@ -78,16 +78,16 @@ export default function SettingsMonitoring(props) {
           getFormApi={(formAPI) => (refForm.current = formAPI)}
           style={{ marginBottom: 15 }}
         >
-          <Form.Section text={t('监控设置')}>
+          <Form.Section text={t('Настройки мониторинга')}>
             <Row gutter={16}>
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.InputNumber
-                  label={t('测试所有渠道的最长响应时间')}
+                  label={t('Максимальное время отклика для всех каналов')}
                   step={1}
                   min={0}
-                  suffix={t('秒')}
+                  suffix={t('сек')}
                   extraText={t(
-                    '当运行通道全部测试时，超过此时间将自动禁用通道',
+                    'Если при тестировании всех каналов время превышает это значение, канал будет автоматически отключён',
                   )}
                   placeholder={''}
                   field={'ChannelDisableThreshold'}
@@ -101,11 +101,11 @@ export default function SettingsMonitoring(props) {
               </Col>
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.InputNumber
-                  label={t('额度提醒阈值')}
+                  label={t('Пороговое значение для напоминания о лимите')}
                   step={1}
                   min={0}
                   suffix={'Token'}
-                  extraText={t('低于此额度时将发送邮件提醒用户')}
+                  extraText={t('Если лимит ниже этого значения, пользователю будет отправлено напоминание по email')}
                   placeholder={''}
                   field={'QuotaRemindThreshold'}
                   onChange={(value) =>
@@ -121,7 +121,7 @@ export default function SettingsMonitoring(props) {
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.Switch
                   field={'AutomaticDisableChannelEnabled'}
-                  label={t('失败时自动禁用通道')}
+                  label={t('Автоматически отключать канал при ошибке')}
                   size='default'
                   checkedText='｜'
                   uncheckedText='〇'
@@ -136,7 +136,7 @@ export default function SettingsMonitoring(props) {
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.Switch
                   field={'AutomaticEnableChannelEnabled'}
-                  label={t('成功时自动启用通道')}
+                  label={t('Автоматически включать канал при успехе')}
                   size='default'
                   checkedText='｜'
                   uncheckedText='〇'
@@ -152,10 +152,10 @@ export default function SettingsMonitoring(props) {
             <Row gutter={16}>
               <Col xs={24} sm={16}>
                 <Form.TextArea
-                  label={t('自动禁用关键词')}
-                  placeholder={t('一行一个，不区分大小写')}
+                  label={t('Ключевые слова для автоматического отключения')}
+                  placeholder={t('По одному в строке, без учёта регистра')}
                   extraText={t(
-                    '当上游通道返回错误中包含这些关键词时（不区分大小写），自动禁用通道',
+                    'Если в ошибке от upstream-канала содержится одно из этих ключевых слов (без учёта регистра), канал будет автоматически отключён',
                   )}
                   field={'AutomaticDisableKeywords'}
                   autosize={{ minRows: 6, maxRows: 12 }}
@@ -167,7 +167,7 @@ export default function SettingsMonitoring(props) {
             </Row>
             <Row>
               <Button size='default' onClick={onSubmit}>
-                {t('保存监控设置')}
+                {t('Сохранить настройки мониторинга')}
               </Button>
             </Row>
           </Form.Section>
