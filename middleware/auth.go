@@ -34,7 +34,7 @@ func authHelper(c *gin.Context, minRole int) {
 		if accessToken == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"success": false,
-				"message": "无权进行此操作，未登录且未提供 access token",
+				"message": "Unauthorized operation, not logged in and no access token provided",
 			})
 			c.Abort()
 			return
@@ -44,7 +44,7 @@ func authHelper(c *gin.Context, minRole int) {
 			if !validUserInfo(user.Username, user.Role) {
 				c.JSON(http.StatusOK, gin.H{
 					"success": false,
-					"message": "无权进行此操作，用户信息无效",
+					"message": "Unauthorized operation, invalid user information",
 				})
 				c.Abort()
 				return
@@ -58,7 +58,7 @@ func authHelper(c *gin.Context, minRole int) {
 		} else {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "无权进行此操作，access token 无效",
+				"message": "Unauthorized operation, invalid access token",
 			})
 			c.Abort()
 			return
@@ -69,7 +69,7 @@ func authHelper(c *gin.Context, minRole int) {
 	if apiUserIdStr == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"success": false,
-			"message": "无权进行此操作，未提供 New-Api-User",
+			"message": "Unauthorized operation, New-Api-User not provided",
 		})
 		c.Abort()
 		return
@@ -78,7 +78,7 @@ func authHelper(c *gin.Context, minRole int) {
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"success": false,
-			"message": "无权进行此操作，New-Api-User 格式错误",
+			"message": "Unauthorized operation, New-Api-User format error",
 		})
 		c.Abort()
 		return
@@ -87,7 +87,7 @@ func authHelper(c *gin.Context, minRole int) {
 	if id != apiUserId {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"success": false,
-			"message": "无权进行此操作，New-Api-User 与登录用户不匹配",
+			"message": "Unauthorized operation, New-Api-User does not match logged-in user",
 		})
 		c.Abort()
 		return
@@ -95,7 +95,7 @@ func authHelper(c *gin.Context, minRole int) {
 	if status.(int) == common.UserStatusDisabled {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": "用户已被封禁",
+			"message": "User has been banned",
 		})
 		c.Abort()
 		return
@@ -103,7 +103,7 @@ func authHelper(c *gin.Context, minRole int) {
 	if role.(int) < minRole {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": "无权进行此操作，权限不足",
+			"message": "Unauthorized operation, insufficient permissions",
 		})
 		c.Abort()
 		return
@@ -111,7 +111,7 @@ func authHelper(c *gin.Context, minRole int) {
 	if !validUserInfo(username.(string), role.(int)) {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": "无权进行此操作，用户信息无效",
+			"message": "Unauthorized operation, invalid user information",
 		})
 		c.Abort()
 		return
@@ -159,7 +159,7 @@ func WssAuth(c *gin.Context) {
 
 func TokenAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
-		// 先检测是否为ws
+		// First check if it's a WebSocket connection
 		if c.Request.Header.Get("Sec-WebSocket-Protocol") != "" {
 			// Sec-WebSocket-Protocol: realtime, openai-insecure-api-key.sk-xxx, openai-beta.realtime-v1
 			// read sk from Sec-WebSocket-Protocol
@@ -174,9 +174,9 @@ func TokenAuth() func(c *gin.Context) {
 			}
 			c.Request.Header.Set("Authorization", "Bearer "+key)
 		}
-		// 检查path包含/v1/messages
+		// Check if path contains /v1/messages
 		if strings.Contains(c.Request.URL.Path, "/v1/messages") {
-			// 从x-api-key中获取key
+			// Get key from x-api-key
 			key := c.Request.Header.Get("x-api-key")
 			if key != "" {
 				c.Request.Header.Set("Authorization", "Bearer "+key)
@@ -214,7 +214,7 @@ func TokenAuth() func(c *gin.Context) {
 		}
 		userEnabled := userCache.Status == common.UserStatusEnabled
 		if !userEnabled {
-			abortWithOpenAiMessage(c, http.StatusForbidden, "用户已被封禁")
+			abortWithOpenAiMessage(c, http.StatusForbidden, "User has been banned")
 			return
 		}
 
@@ -240,7 +240,7 @@ func TokenAuth() func(c *gin.Context) {
 			if model.IsAdmin(token.UserId) {
 				c.Set("specific_channel_id", parts[1])
 			} else {
-				abortWithOpenAiMessage(c, http.StatusForbidden, "普通用户不支持指定渠道")
+				abortWithOpenAiMessage(c, http.StatusForbidden, "Regular users cannot specify channels")
 				return
 			}
 		}

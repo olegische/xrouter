@@ -251,7 +251,7 @@ const (
 	ResponsesOutputTypeItemDone  = "response.output_item.done"
 )
 
-// ResponsesStreamResponse 用于处理 /v1/responses 流式响应
+// ResponsesStreamResponse used to process /v1/responses streaming response
 type ResponsesStreamResponse struct {
 	Type     string                   `json:"type"`
 	Response *OpenAIResponsesResponse `json:"response,omitempty"`

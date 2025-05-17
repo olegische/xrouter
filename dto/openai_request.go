@@ -168,7 +168,7 @@ const (
 	ContentTypeImageURL   = "image_url"
 	ContentTypeInputAudio = "input_audio"
 	ContentTypeFile       = "file"
-	ContentTypeVideoUrl   = "video_url" // 阿里百炼视频识别
+	ContentTypeVideoUrl   = "video_url" // Alibaba Bailian video recognition
 )
 
 func (m *Message) GetPrefix() bool {
@@ -261,7 +261,7 @@ func (m *Message) ParseContent() []MediaContent {
 
 	var contentList []MediaContent
 
-	// 先尝试解析为字符串
+	// First try to parse as string
 	var stringContent string
 	if err := json.Unmarshal(m.Content, &stringContent); err == nil {
 		contentList = []MediaContent{{
@@ -272,7 +272,7 @@ func (m *Message) ParseContent() []MediaContent {
 		return contentList
 	}
 
-	// 尝试解析为数组
+	// Try to parse as array
 	var arrayContent []map[string]interface{}
 	if err := json.Unmarshal(m.Content, &arrayContent); err == nil {
 		for _, contentItem := range arrayContent {
