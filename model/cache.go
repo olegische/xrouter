@@ -116,7 +116,7 @@ func CacheGetRandomSatisfiedChannel(group string, model string, retry int) (*Cha
 		}
 	}
 
-	// 平滑系数
+	// Smoothing factor
 	smoothingFactor := 10
 	// Calculate the total weight of all channels up to endIdx
 	totalWeight := 0
@@ -146,7 +146,7 @@ func CacheGetChannel(id int) (*Channel, error) {
 
 	c, ok := channelsIDM[id]
 	if !ok {
-		return nil, errors.New(fmt.Sprintf("当前渠道# %d，已不存在", id))
+		return nil, errors.New(fmt.Sprintf("Current channel #%d no longer exists", id))
 	}
 	return c, nil
 }

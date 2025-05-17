@@ -72,19 +72,19 @@ func SearchUserTokens(userId int, keyword string, token string) (tokens []*Token
 
 func ValidateUserToken(key string) (token *Token, err error) {
 	if key == "" {
-		return nil, errors.New("未提供令牌")
+		return nil, errors.New("token not provided")
 	}
 	token, err = GetTokenByKey(key, false)
 	if err == nil {
 		if token.Status == common.TokenStatusExhausted {
 			keyPrefix := key[:3]
 			keySuffix := key[len(key)-3:]
-			return token, errors.New("该令牌额度已用尽 TokenStatusExhausted[sk-" + keyPrefix + "***" + keySuffix + "]")
+			return token, errors.New("this token quota has been exhausted TokenStatusExhausted[sk-" + keyPrefix + "***" + keySuffix + "]")
 		} else if token.Status == common.TokenStatusExpired {
-			return token, errors.New("该令牌已过期")
+			return token, errors.New("this token has expired")
 		}
 		if token.Status != common.TokenStatusEnabled {
-			return token, errors.New("该令牌状态不可用")
+			return token, errors.New("this token status is not available")
 		}
 		if token.ExpiredTime != -1 && token.ExpiredTime < common.GetTimestamp() {
 			if !common.RedisEnabled {
@@ -94,7 +94,7 @@ func ValidateUserToken(key string) (token *Token, err error) {
 					common.SysError("failed to update token status" + err.Error())
 				}
 			}
-			return token, errors.New("该令牌已过期")
+			return token, errors.New("this token has expired")
 		}
 		if !token.UnlimitedQuota && token.RemainQuota <= 0 {
 			if !common.RedisEnabled {
@@ -107,16 +107,16 @@ func ValidateUserToken(key string) (token *Token, err error) {
 			}
 			keyPrefix := key[:3]
 			keySuffix := key[len(key)-3:]
-			return token, errors.New(fmt.Sprintf("[sk-%s***%s] 该令牌额度已用尽 !token.UnlimitedQuota && token.RemainQuota = %d", keyPrefix, keySuffix, token.RemainQuota))
+			return token, errors.New(fmt.Sprintf("[sk-%s***%s] this token quota has been exhausted !token.UnlimitedQuota && token.RemainQuota = %d", keyPrefix, keySuffix, token.RemainQuota))
 		}
 		return token, nil
 	}
-	return nil, errors.New("无效的令牌")
+	return nil, errors.New("invalid token")
 }
 
 func GetTokenByIds(id int, userId int) (*Token, error) {
 	if id == 0 || userId == 0 {
-		return nil, errors.New("id 或 userId 为空！")
+		return nil, errors.New("id or userId is empty!")
 	}
 	token := Token{Id: id, UserId: userId}
 	var err error = nil
@@ -126,7 +126,7 @@ func GetTokenByIds(id int, userId int) (*Token, error) {
 
 func GetTokenById(id int) (*Token, error) {
 	if id == 0 {
-		return nil, errors.New("id 为空！")
+		return nil, errors.New("id is empty!")
 	}
 	token := Token{Id: id}
 	var err error = nil
@@ -251,7 +251,7 @@ func DisableModelLimits(tokenId int) error {
 func DeleteTokenById(id int, userId int) (err error) {
 	// Why we need userId here? In case user want to delete other's token.
 	if id == 0 || userId == 0 {
-		return errors.New("id 或 userId 为空！")
+		return errors.New("id or userId is empty!")
 	}
 	token := Token{Id: id, UserId: userId}
 	err = DB.Where(token).First(&token).Error
@@ -263,7 +263,7 @@ func DeleteTokenById(id int, userId int) (err error) {
 
 func IncreaseTokenQuota(id int, key string, quota int) (err error) {
 	if quota < 0 {
-		return errors.New("quota 不能为负数！")
+		return errors.New("quota cannot be negative!")
 	}
 	if common.RedisEnabled {
 		gopool.Go(func() {
@@ -293,7 +293,7 @@ func increaseTokenQuota(id int, quota int) (err error) {
 
 func DecreaseTokenQuota(id int, key string, quota int) (err error) {
 	if quota < 0 {
-		return errors.New("quota 不能为负数！")
+		return errors.New("quota cannot be negative!")
 	}
 	if common.RedisEnabled {
 		gopool.Go(func() {

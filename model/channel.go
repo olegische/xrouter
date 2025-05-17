@@ -117,7 +117,7 @@ func SearchChannels(keyword string, group string, model string, idSort bool) ([]
 	var channels []*Channel
 	modelsCol := "`models`"
 
-	// 如果是 PostgreSQL，使用双引号
+	// If using PostgreSQL, use double quotes
 	if common.UsingPostgreSQL {
 		modelsCol = `"models"`
 	}
@@ -133,10 +133,10 @@ func SearchChannels(keyword string, group string, model string, idSort bool) ([]
 		order = "id desc"
 	}
 
-	// 构造基础查询
+	// Construct base query
 	baseQuery := DB.Model(&Channel{}).Omit(keyCol)
 
-	// 构造WHERE子句
+	// Construct WHERE clause
 	var whereClause string
 	var args []interface{}
 	if group != "" && group != "null" {
@@ -154,7 +154,7 @@ func SearchChannels(keyword string, group string, model string, idSort bool) ([]
 		args = append(args, common.String2Int(keyword), "%"+keyword+"%", keyword, "%"+keyword+"%", "%"+model+"%")
 	}
 
-	// 执行查询
+	// Execute query
 	err := baseQuery.Where(whereClause, args...).Order(order).Find(&channels).Error
 	if err != nil {
 		return nil, err
@@ -189,11 +189,11 @@ func BatchInsertChannels(channels []Channel) error {
 }
 
 func BatchDeleteChannels(ids []int) error {
-	//使用事务 删除channel表和channel_ability表
+	//Use transaction to delete from channel table and channel_ability table
 	tx := DB.Begin()
 	err := tx.Where("id in (?)", ids).Delete(&Channel{}).Error
 	if err != nil {
-		// 回滚事务
+		// Rollback transaction
 		tx.Rollback()
 		return err
 	}
@@ -203,7 +203,7 @@ func BatchDeleteChannels(ids []int) error {
 		tx.Rollback()
 		return err
 	}
-	// 提交事务
+	// Commit transaction
 	tx.Commit()
 	return err
 }
@@ -302,11 +302,11 @@ func UpdateChannelStatusById(id int, status int, reason string) bool {
 		defer channelStatusLock.Unlock()
 
 		channelCache, _ := CacheGetChannel(id)
-		// 如果缓存渠道存在，且状态已是目标状态，直接返回
+		// If cached channel exists and status is already the target status, return directly
 		if channelCache != nil && channelCache.Status == status {
 			return false
 		}
-		// 如果缓存渠道不存在(说明已经被禁用)，且要设置的状态不为启用，直接返回
+		// If cached channel doesn't exist (meaning it's already disabled), and the status to set is not enabled, return directly
 		if channelCache == nil && status != common.ChannelStatusEnabled {
 			return false
 		}
@@ -369,7 +369,7 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 	updateData := Channel{}
 	shouldReCreateAbilities := false
 	updatedTag := tag
-	// 如果 newTag 不为空且不等于 tag，则更新 tag
+	// If newTag is not empty and not equal to tag, update tag
 	if newTag != nil && *newTag != tag {
 		updateData.Tag = newTag
 		updatedTag = *newTag
@@ -450,7 +450,7 @@ func SearchTags(keyword string, group string, model string, idSort bool) ([]*str
 	var tags []*string
 	modelsCol := "`models`"
 
-	// 如果是 PostgreSQL，使用双引号
+	// If using PostgreSQL, use double quotes
 	if common.UsingPostgreSQL {
 		modelsCol = `"models"`
 	}
@@ -466,10 +466,10 @@ func SearchTags(keyword string, group string, model string, idSort bool) ([]*str
 		order = "id desc"
 	}
 
-	// 构造基础查询
+	// Construct base query
 	baseQuery := DB.Model(&Channel{}).Omit(keyCol)
 
-	// 构造WHERE子句
+	// Construct WHERE clause
 	var whereClause string
 	var args []interface{}
 	if group != "" && group != "null" {
@@ -541,13 +541,13 @@ func GetChannelsByIds(ids []int) ([]*Channel, error) {
 }
 
 func BatchSetChannelTag(ids []int, tag *string) error {
-	// 开启事务
+	// Start transaction
 	tx := DB.Begin()
 	if tx.Error != nil {
 		return tx.Error
 	}
 
-	// 更新标签
+	// Update tag
 	err := tx.Model(&Channel{}).Where("id in (?)", ids).Update("tag", tag).Error
 	if err != nil {
 		tx.Rollback()
@@ -569,6 +569,6 @@ func BatchSetChannelTag(ids []int, tag *string) error {
 		}
 	}
 
-	// 提交事务
+	// Commit transaction
 	return tx.Commit().Error
 }
