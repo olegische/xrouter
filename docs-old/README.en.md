@@ -42,11 +42,11 @@
 
 ## 📚 Documentation
 
-For detailed documentation, please visit our official Wiki: [https://docs.xrouter.chat/](https://docs.xrouter.chat/)
+For detailed documentation, please visit our official Wiki: [https://docs.newapi.pro/](https://docs.newapi.pro/)
 
 ## ✨ Key Features
 
-New API offers a wide range of features, please refer to [Features Introduction](https://docs.xrouter.chat/wiki/features-introduction) for details:
+New API offers a wide range of features, please refer to [Features Introduction](https://docs.newapi.pro/wiki/features-introduction) for details:
 
 1. 🎨 Brand new UI interface
 2. 🌍 Multi-language support
@@ -58,9 +58,9 @@ New API offers a wide range of features, please refer to [Features Introduction]
 8. 📈 Data dashboard (console)
 9. 🔒 Token grouping and model restrictions
 10. 🤖 Support for more authorization login methods (LinuxDO, Telegram, OIDC)
-11. 🔄 Support for Rerank models (Cohere and Jina), [API Documentation](https://docs.xrouter.chat/api/jinaai-rerank)
-12. ⚡ Support for OpenAI Realtime API (including Azure channels), [API Documentation](https://docs.xrouter.chat/api/openai-realtime)
-13. ⚡ Support for Claude Messages format, [API Documentation](https://docs.xrouter.chat/api/anthropic-chat)
+11. 🔄 Support for Rerank models (Cohere and Jina), [API Documentation](https://docs.newapi.pro/api/jinaai-rerank)
+12. ⚡ Support for OpenAI Realtime API (including Azure channels), [API Documentation](https://docs.newapi.pro/api/openai-realtime)
+13. ⚡ Support for Claude Messages format, [API Documentation](https://docs.newapi.pro/api/anthropic-chat)
 14. Support for entering chat interface via /chat2link route
 15. 🧠 Support for setting reasoning effort through model name suffixes:
     1. OpenAI o-series models
@@ -82,19 +82,19 @@ New API offers a wide range of features, please refer to [Features Introduction]
 
 ## Model Support
 
-This version supports multiple models, please refer to [API Documentation-Relay Interface](https://docs.xrouter.chat/api) for details:
+This version supports multiple models, please refer to [API Documentation-Relay Interface](https://docs.newapi.pro/api) for details:
 
 1. Third-party models **gpts** (gpt-4-gizmo-*)
-2. Third-party channel [Midjourney-Proxy(Plus)](https://github.com/novicezk/midjourney-proxy) interface, [API Documentation](https://docs.xrouter.chat/api/midjourney-proxy-image)
-3. Third-party channel [Suno API](https://github.com/Suno-API/Suno-API) interface, [API Documentation](https://docs.xrouter.chat/api/suno-music)
+2. Third-party channel [Midjourney-Proxy(Plus)](https://github.com/novicezk/midjourney-proxy) interface, [API Documentation](https://docs.newapi.pro/api/midjourney-proxy-image)
+3. Third-party channel [Suno API](https://github.com/Suno-API/Suno-API) interface, [API Documentation](https://docs.newapi.pro/api/suno-music)
 4. Custom channels, supporting full call address input
-5. Rerank models ([Cohere](https://cohere.ai/) and [Jina](https://jina.ai/)), [API Documentation](https://docs.xrouter.chat/api/jinaai-rerank)
-6. Claude Messages format, [API Documentation](https://docs.xrouter.chat/api/anthropic-chat)
+5. Rerank models ([Cohere](https://cohere.ai/) and [Jina](https://jina.ai/)), [API Documentation](https://docs.newapi.pro/api/jinaai-rerank)
+6. Claude Messages format, [API Documentation](https://docs.newapi.pro/api/anthropic-chat)
 7. Dify, currently only supports chatflow
 
 ## Environment Variable Configuration
 
-For detailed configuration instructions, please refer to [Installation Guide-Environment Variables Configuration](https://docs.xrouter.chat/installation/environment-variables):
+For detailed configuration instructions, please refer to [Installation Guide-Environment Variables Configuration](https://docs.newapi.pro/installation/environment-variables):
 
 - `GENERATE_DEFAULT_TOKEN`: Whether to generate initial tokens for newly registered users, default is `false`
 - `STREAMING_TIMEOUT`: Streaming response timeout, default is 60 seconds
@@ -113,7 +113,7 @@ For detailed configuration instructions, please refer to [Installation Guide-Env
 
 ## Deployment
 
-For detailed deployment guides, please refer to [Installation Guide-Deployment Methods](https://docs.xrouter.chat/installation):
+For detailed deployment guides, please refer to [Installation Guide-Deployment Methods](https://docs.newapi.pro/installation):
 
 > [!TIP]
 > Latest Docker image: `calciumion/new-api:latest`
@@ -160,13 +160,13 @@ Channel retry functionality has been implemented, you can set the number of retr
 
 ## API Documentation
 
-For detailed API documentation, please refer to [API Documentation](https://docs.xrouter.chat/api):
+For detailed API documentation, please refer to [API Documentation](https://docs.newapi.pro/api):
 
-- [Chat API](https://docs.xrouter.chat/api/openai-chat)
-- [Image API](https://docs.xrouter.chat/api/openai-image)
-- [Rerank API](https://docs.xrouter.chat/api/jinaai-rerank)
-- [Realtime API](https://docs.xrouter.chat/api/openai-realtime)
-- [Claude Chat API (messages)](https://docs.xrouter.chat/api/anthropic-chat)
+- [Chat API](https://docs.newapi.pro/api/openai-chat)
+- [Image API](https://docs.newapi.pro/api/openai-image)
+- [Rerank API](https://docs.newapi.pro/api/jinaai-rerank)
+- [Realtime API](https://docs.newapi.pro/api/openai-realtime)
+- [Claude Chat API (messages)](https://docs.newapi.pro/api/anthropic-chat)
 
 ## Related Projects
 - [One API](https://github.com/songquanpeng/one-api): Original project
@@ -180,10 +180,10 @@ Other projects based on New API:
 
 ## Help and Support
 
-If you have any questions, please refer to [Help and Support](https://docs.xrouter.chat/support):
-- [Community Interaction](https://docs.xrouter.chat/support/community-interaction)
-- [Issue Feedback](https://docs.xrouter.chat/support/feedback-issues)
-- [FAQ](https://docs.xrouter.chat/support/faq)
+If you have any questions, please refer to [Help and Support](https://docs.newapi.pro/support):
+- [Community Interaction](https://docs.newapi.pro/support/community-interaction)
+- [Issue Feedback](https://docs.newapi.pro/support/feedback-issues)
+- [FAQ](https://docs.newapi.pro/support/faq)
 
 ## 🌟 Star History
 

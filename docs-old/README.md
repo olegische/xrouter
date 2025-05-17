@@ -42,11 +42,11 @@
 
 ## 📚 Документация
 
-Подробная документация доступна на нашей официальной Wiki: [https://docs.xrouter.chat/](https://docs.xrouter.chat/)
+Подробная документация доступна на нашей официальной Wiki: [https://docs.newapi.pro/](https://docs.newapi.pro/)
 
 ## ✨ Основные особенности
 
-New API предоставляет богатый функционал, подробное описание можно найти в [описании функций](https://docs.xrouter.chat/wiki/features-introduction):
+New API предоставляет богатый функционал, подробное описание можно найти в [описании функций](https://docs.newapi.pro/wiki/features-introduction):
 
 1. 🎨 Полностью новый пользовательский интерфейс
 2. 🌍 Поддержка нескольких языков
@@ -58,9 +58,9 @@ New API предоставляет богатый функционал, подр
 8. 📈 Панель данных (консоль)
 9. 🔒 Группировка токенов, ограничения моделей
 10. 🤖 Поддержка дополнительных методов авторизации (LinuxDO, Telegram, OIDC)
-11. 🔄 Поддержка моделей Rerank (Cohere и Jina), [документация API](https://docs.xrouter.chat/api/jinaai-rerank)
-12. ⚡ Поддержка OpenAI Realtime API (включая канал Azure), [документация API](https://docs.xrouter.chat/api/openai-realtime)
-13. ⚡ Поддержка формата Claude Messages, [документация API](https://docs.xrouter.chat/api/anthropic-chat)
+11. 🔄 Поддержка моделей Rerank (Cohere и Jina), [документация API](https://docs.newapi.pro/api/jinaai-rerank)
+12. ⚡ Поддержка OpenAI Realtime API (включая канал Azure), [документация API](https://docs.newapi.pro/api/openai-realtime)
+13. ⚡ Поддержка формата Claude Messages, [документация API](https://docs.newapi.pro/api/anthropic-chat)
 14. Поддержка входа в интерфейс чата через маршрут /chat2link
 15. 🧠 Поддержка настройки reasoning effort через суффикс названия модели:
     1. Модели OpenAI серии o
@@ -82,19 +82,19 @@ New API предоставляет богатый функционал, подр
 
 ## Поддержка моделей
 
-Эта версия поддерживает различные модели, подробности см. в [документации API-Relay API](https://docs.xrouter.chat/api):
+Эта версия поддерживает различные модели, подробности см. в [документации API-Relay API](https://docs.newapi.pro/api):
 
 1. Сторонние модели **gpts** (gpt-4-gizmo-*)
-2. Сторонний канал [Midjourney-Proxy(Plus)](https://github.com/novicezk/midjourney-proxy), [документация API](https://docs.xrouter.chat/api/midjourney-proxy-image)
-3. Сторонний канал [Suno API](https://github.com/Suno-API/Suno-API), [документация API](https://docs.xrouter.chat/api/suno-music)
+2. Сторонний канал [Midjourney-Proxy(Plus)](https://github.com/novicezk/midjourney-proxy), [документация API](https://docs.newapi.pro/api/midjourney-proxy-image)
+3. Сторонний канал [Suno API](https://github.com/Suno-API/Suno-API), [документация API](https://docs.newapi.pro/api/suno-music)
 4. Пользовательские каналы с возможностью указания полного адреса вызова
-5. Модели Rerank ([Cohere](https://cohere.ai/) и [Jina](https://jina.ai/)), [документация API](https://docs.xrouter.chat/api/jinaai-rerank)
-6. Формат Claude Messages, [документация API](https://docs.xrouter.chat/api/anthropic-chat)
+5. Модели Rerank ([Cohere](https://cohere.ai/) и [Jina](https://jina.ai/)), [документация API](https://docs.newapi.pro/api/jinaai-rerank)
+6. Формат Claude Messages, [документация API](https://docs.newapi.pro/api/anthropic-chat)
 7. Dify, в настоящее время поддерживается только chatflow
 
 ## Конфигурация переменных окружения
 
-Подробное описание конфигурации см. в [Руководстве по установке-Конфигурация переменных окружения](https://docs.xrouter.chat/installation/environment-variables):
+Подробное описание конфигурации см. в [Руководстве по установке-Конфигурация переменных окружения](https://docs.newapi.pro/installation/environment-variables):
 
 - `GENERATE_DEFAULT_TOKEN`: Генерировать ли начальный токен для новых пользователей, по умолчанию `false`
 - `STREAMING_TIMEOUT`: Тайм-аут потокового ответа, по умолчанию 60 секунд
@@ -113,7 +113,7 @@ New API предоставляет богатый функционал, подр
 
 ## Развертывание
 
-Подробное руководство по развертыванию см. в [Руководстве по установке-Методы развертывания](https://docs.xrouter.chat/installation):
+Подробное руководство по развертыванию см. в [Руководстве по установке-Методы развертывания](https://docs.newapi.pro/installation):
 
 > [!TIP]
 > Последний образ Docker: `calciumion/new-api:latest`  
@@ -160,13 +160,13 @@ docker run --name new-api -d --restart always -p 3000:3000 -e SQL_DSN="root:1234
 
 ## Документация API
 
-Подробную документацию API см. в [Документации API](https://docs.xrouter.chat/api):
+Подробную документацию API см. в [Документации API](https://docs.newapi.pro/api):
 
-- [Интерфейс чата (Chat)](https://docs.xrouter.chat/api/openai-chat)
-- [Интерфейс изображений (Image)](https://docs.xrouter.chat/api/openai-image)
-- [Интерфейс переупорядочивания (Rerank)](https://docs.xrouter.chat/api/jinaai-rerank)
-- [Интерфейс реального времени (Realtime)](https://docs.xrouter.chat/api/openai-realtime)
-- [Интерфейс чата Claude (messages)](https://docs.xrouter.chat/api/anthropic-chat)
+- [Интерфейс чата (Chat)](https://docs.newapi.pro/api/openai-chat)
+- [Интерфейс изображений (Image)](https://docs.newapi.pro/api/openai-image)
+- [Интерфейс переупорядочивания (Rerank)](https://docs.newapi.pro/api/jinaai-rerank)
+- [Интерфейс реального времени (Realtime)](https://docs.newapi.pro/api/openai-realtime)
+- [Интерфейс чата Claude (messages)](https://docs.newapi.pro/api/anthropic-chat)
 
 ## Связанные проекты
 - [One API](https://github.com/songquanpeng/one-api): Оригинальный проект
@@ -180,10 +180,10 @@ docker run --name new-api -d --restart always -p 3000:3000 -e SQL_DSN="root:1234
 
 ## Поддержка
 
-Если у вас есть вопросы, обратитесь к [Поддержке](https://docs.xrouter.chat/support):
-- [Общение сообщества](https://docs.xrouter.chat/support/community-interaction)
-- [Обратная связь по проблемам](https://docs.xrouter.chat/support/feedback-issues)
-- [Часто задаваемые вопросы](https://docs.xrouter.chat/support/faq)
+Если у вас есть вопросы, обратитесь к [Поддержке](https://docs.newapi.pro/support):
+- [Общение сообщества](https://docs.newapi.pro/support/community-interaction)
+- [Обратная связь по проблемам](https://docs.newapi.pro/support/feedback-issues)
+- [Часто задаваемые вопросы](https://docs.newapi.pro/support/faq)
 
 ## 🌟 История звезд
 
