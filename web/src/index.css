@@ -128,13 +128,13 @@ body {
     margin-right: 0;
   }
 
-  /* 确保移动端内容可滚动 */
+  /* Ensure mobile content is scrollable */
   .semi-layout-content {
     -webkit-overflow-scrolling: touch !important;
     overscroll-behavior-y: auto !important;
   }
 
-  /* 修复移动端下拉刷新 */
+  /* Fix mobile pull-to-refresh */
   body {
     overflow: visible !important;
     overscroll-behavior-y: auto !important;
@@ -142,13 +142,13 @@ body {
     height: 100% !important;
   }
 
-  /* 确保内容区域在移动端可以正常滚动 */
+  /* Ensure content area is scrollable on mobile */
   #root {
     overflow: visible !important;
     height: 100% !important;
   }
 
-  /* 隐藏在移动设备上 */
+  /* Hide on mobile devices */
   .hide-on-mobile {
     display: none !important;
   }
@@ -200,13 +200,13 @@ code {
   margin-bottom: 0;
 }
 
-/* 自定义侧边栏按钮悬停效果 */
+/* Custom sidebar button hover effect */
 .semi-navigation-item:hover {
   transform: translateX(2px);
   box-shadow: 0 2px 8px rgba(var(--semi-color-primary-rgb), 0.2);
 }
 
-/* 自定义侧边栏按钮选中效果 */
+/* Custom sidebar button selected effect */
 .semi-navigation-item-selected {
   position: relative;
   overflow: hidden;
@@ -254,7 +254,7 @@ code {
   font-size: 1.1em;
 }
 
-/* 顶部栏样式 */
+/* Top bar styles */
 .topnav {
   padding: 0 16px;
 }
@@ -277,7 +277,7 @@ code {
   font-weight: 600;
 }
 
-/* 顶部栏文本样式 */
+/* Top bar text styles */
 .header-bar-text {
   color: var(--semi-color-text-0);
   font-weight: 500;
@@ -288,7 +288,7 @@ code {
   color: var(--semi-color-primary);
 }
 
-/* 自定义滚动条样式 */
+/* Custom scrollbar styles */
 .semi-layout-content::-webkit-scrollbar,
 .semi-sider::-webkit-scrollbar {
   width: 6px;
