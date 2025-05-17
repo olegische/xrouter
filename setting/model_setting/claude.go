@@ -11,7 +11,7 @@ import (
 //var ClaudeThinkingAdapterMaxTokens = 8192
 //var ClaudeThinkingAdapterBudgetTokensPercentage = 0.8
 
-// ClaudeSettings 定义Claude模型的配置
+// ClaudeSettings Defines the configuration for Claude models
 type ClaudeSettings struct {
 	HeadersSettings                       map[string]map[string][]string `json:"model_headers_settings"`
 	DefaultMaxTokens                      map[string]int                 `json:"default_max_tokens"`
@@ -19,7 +19,7 @@ type ClaudeSettings struct {
 	ThinkingAdapterBudgetTokensPercentage float64                        `json:"thinking_adapter_budget_tokens_percentage"`
 }
 
-// 默认配置
+// Default configuration
 var defaultClaudeSettings = ClaudeSettings{
 	HeadersSettings:        map[string]map[string][]string{},
 	ThinkingAdapterEnabled: true,
@@ -29,15 +29,15 @@ var defaultClaudeSettings = ClaudeSettings{
 	ThinkingAdapterBudgetTokensPercentage: 0.8,
 }
 
-// 全局实例
+// Global instance
 var claudeSettings = defaultClaudeSettings
 
 func init() {
-	// 注册到全局配置管理器
+	// Register to global configuration manager
 	config.GlobalConfig.Register("claude", &claudeSettings)
 }
 
-// GetClaudeSettings 获取Claude配置
+// GetClaudeSettings Get Claude configuration
 func GetClaudeSettings() *ClaudeSettings {
 	// check default max tokens must have default key
 	if _, ok := claudeSettings.DefaultMaxTokens["default"]; !ok {

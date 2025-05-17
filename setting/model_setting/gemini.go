@@ -4,7 +4,7 @@ import (
 	"one-api/setting/config"
 )
 
-// GeminiSettings 定义Gemini模型的配置
+// GeminiSettings Defines the configuration for Gemini models
 type GeminiSettings struct {
 	SafetySettings                        map[string]string `json:"safety_settings"`
 	VersionSettings                       map[string]string `json:"version_settings"`
@@ -13,7 +13,7 @@ type GeminiSettings struct {
 	ThinkingAdapterBudgetTokensPercentage float64           `json:"thinking_adapter_budget_tokens_percentage"`
 }
 
-// 默认配置
+// Default configuration
 var defaultGeminiSettings = GeminiSettings{
 	SafetySettings: map[string]string{
 		"default":                       "OFF",
@@ -31,20 +31,20 @@ var defaultGeminiSettings = GeminiSettings{
 	ThinkingAdapterBudgetTokensPercentage: 0.6,
 }
 
-// 全局实例
+// Global instance
 var geminiSettings = defaultGeminiSettings
 
 func init() {
-	// 注册到全局配置管理器
+	// Register to global configuration manager
 	config.GlobalConfig.Register("gemini", &geminiSettings)
 }
 
-// GetGeminiSettings 获取Gemini配置
+// GetGeminiSettings Get Gemini configuration
 func GetGeminiSettings() *GeminiSettings {
 	return &geminiSettings
 }
 
-// GetGeminiSafetySetting 获取安全设置
+// GetGeminiSafetySetting Get safety settings
 func GetGeminiSafetySetting(key string) string {
 	if value, ok := geminiSettings.SafetySettings[key]; ok {
 		return value
@@ -52,7 +52,7 @@ func GetGeminiSafetySetting(key string) string {
 	return geminiSettings.SafetySettings["default"]
 }
 
-// GetGeminiVersionSetting 获取版本设置
+// GetGeminiVersionSetting Get version settings
 func GetGeminiVersionSetting(key string) string {
 	if value, ok := geminiSettings.VersionSettings[key]; ok {
 		return value

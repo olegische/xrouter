@@ -6,8 +6,8 @@ import (
 )
 
 var userUsableGroups = map[string]string{
-	"default": "默认分组",
-	"vip":     "vip分组",
+	"default": "Default Group",
+	"vip":     "VIP Group",
 }
 
 func GetUserUsableGroupsCopy() map[string]string {
@@ -38,11 +38,11 @@ func GetUserUsableGroups(userGroup string) map[string]string {
 			groupsCopy["default"] = "default"
 		}
 	}
-	// 如果userGroup不在UserUsableGroups中，返回UserUsableGroups + userGroup
+	// If userGroup is not in UserUsableGroups, return UserUsableGroups + userGroup
 	if _, ok := groupsCopy[userGroup]; !ok {
-		groupsCopy[userGroup] = "用户分组"
+		groupsCopy[userGroup] = "User Group"
 	}
-	// 如果userGroup在UserUsableGroups中，返回UserUsableGroups
+	// If userGroup is in UserUsableGroups, return UserUsableGroups
 	return groupsCopy
 }
 

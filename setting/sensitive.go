@@ -7,13 +7,13 @@ var CheckSensitiveOnPromptEnabled = true
 
 //var CheckSensitiveOnCompletionEnabled = true
 
-// StopOnSensitiveEnabled 如果检测到敏感词，是否立刻停止生成，否则替换敏感词
+// StopOnSensitiveEnabled If sensitive words are detected, whether to stop generation immediately, otherwise replace sensitive words
 var StopOnSensitiveEnabled = true
 
-// StreamCacheQueueLength 流模式缓存队列长度，0表示无缓存
+// StreamCacheQueueLength Stream mode cache queue length, 0 means no cache
 var StreamCacheQueueLength = 0
 
-// SensitiveWords 敏感词
+// SensitiveWords Sensitive words
 // var SensitiveWords []string
 var SensitiveWords = []string{
 	"test_sensitive",

@@ -123,7 +123,7 @@ func SearchChannels(keyword string, group string, model string, idSort bool) ([]
 	}
 
 	baseURLCol := "`base_url`"
-	// 如果是 PostgreSQL，使用双引号
+	// If using PostgreSQL, use double quotes
 	if common.UsingPostgreSQL {
 		baseURLCol = `"base_url"`
 	}
@@ -199,7 +199,7 @@ func BatchDeleteChannels(ids []int) error {
 	}
 	err = tx.Where("channel_id in (?)", ids).Delete(&Ability{}).Error
 	if err != nil {
-		// 回滚事务
+		// Rollback transaction
 		tx.Rollback()
 		return err
 	}
@@ -456,7 +456,7 @@ func SearchTags(keyword string, group string, model string, idSort bool) ([]*str
 	}
 
 	baseURLCol := "`base_url`"
-	// 如果是 PostgreSQL，使用双引号
+	// If using PostgreSQL, use double quotes
 	if common.UsingPostgreSQL {
 		baseURLCol = `"base_url"`
 	}

@@ -8,7 +8,7 @@ type GeneralSetting struct {
 	PingIntervalSeconds int    `json:"ping_interval_seconds"`
 }
 
-// 默认配置
+// Default configuration
 var generalSetting = GeneralSetting{
 	DocsLink:            "https://docs.newapi.pro",
 	PingIntervalEnabled: false,
@@ -16,7 +16,7 @@ var generalSetting = GeneralSetting{
 }
 
 func init() {
-	// 注册到全局配置管理器
+	// Register to global configuration manager
 	config.GlobalConfig.Register("general_setting", &generalSetting)
 }
 
