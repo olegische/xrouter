@@ -1,15 +1,15 @@
 package constant
 
 var (
-	UserSettingNotifyType            = "notify_type"                    // QuotaWarningType 额度预警类型
-	UserSettingQuotaWarningThreshold = "quota_warning_threshold"        // QuotaWarningThreshold 额度预警阈值
-	UserSettingWebhookUrl            = "webhook_url"                    // WebhookUrl webhook地址
-	UserSettingWebhookSecret         = "webhook_secret"                 // WebhookSecret webhook密钥
-	UserSettingNotificationEmail     = "notification_email"             // NotificationEmail 通知邮箱地址
-	UserAcceptUnsetRatioModel        = "accept_unset_model_ratio_model" // AcceptUnsetRatioModel 是否接受未设置价格的模型
+	UserSettingNotifyType            = "notify_type"                    // QuotaWarningType Quota warning type
+	UserSettingQuotaWarningThreshold = "quota_warning_threshold"        // QuotaWarningThreshold Quota warning threshold
+	UserSettingWebhookUrl            = "webhook_url"                    // WebhookUrl webhook address
+	UserSettingWebhookSecret         = "webhook_secret"                 // WebhookSecret webhook secret key
+	UserSettingNotificationEmail     = "notification_email"             // NotificationEmail Notification email address
+	UserAcceptUnsetRatioModel        = "accept_unset_model_ratio_model" // AcceptUnsetRatioModel Whether to accept models with unset prices
 )
 
 var (
-	NotifyTypeEmail   = "email"   // Email 邮件
+	NotifyTypeEmail   = "email"   // Email email
 	NotifyTypeWebhook = "webhook" // Webhook
 )

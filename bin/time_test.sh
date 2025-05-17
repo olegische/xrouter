@@ -8,7 +8,7 @@ fi
 domain=$1
 key=$2
 count=$3
-model=${4:-"gpt-3.5-turbo"} # 设置默认模型为 gpt-3.5-turbo
+model=${4:-"gpt-3.5-turbo"} # Set default model to gpt-3.5-turbo
 
 total_time=0
 times=()

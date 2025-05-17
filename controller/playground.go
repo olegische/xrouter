@@ -28,7 +28,7 @@ func Playground(c *gin.Context) {
 
 	useAccessToken := c.GetBool("use_access_token")
 	if useAccessToken {
-		openaiErr = service.OpenAIErrorWrapperLocal(errors.New("暂不支持使用 access token"), "access_token_not_supported", http.StatusBadRequest)
+		openaiErr = service.OpenAIErrorWrapperLocal(errors.New("Access token is not supported yet"), "access_token_not_supported", http.StatusBadRequest)
 		return
 	}
 
@@ -40,7 +40,7 @@ func Playground(c *gin.Context) {
 	}
 
 	if playgroundRequest.Model == "" {
-		openaiErr = service.OpenAIErrorWrapperLocal(errors.New("请选择模型"), "model_required", http.StatusBadRequest)
+		openaiErr = service.OpenAIErrorWrapperLocal(errors.New("Please select a model"), "model_required", http.StatusBadRequest)
 		return
 	}
 	c.Set("original_model", playgroundRequest.Model)
@@ -51,7 +51,7 @@ func Playground(c *gin.Context) {
 		group = userGroup
 	} else {
 		if !setting.GroupInUserUsableGroups(group) && group != userGroup {
-			openaiErr = service.OpenAIErrorWrapperLocal(errors.New("无权访问该分组"), "group_not_allowed", http.StatusForbidden)
+			openaiErr = service.OpenAIErrorWrapperLocal(errors.New("No permission to access this group"), "group_not_allowed", http.StatusForbidden)
 			return
 		}
 		c.Set("group", group)
@@ -59,7 +59,7 @@ func Playground(c *gin.Context) {
 	c.Set("token_name", "playground-"+group)
 	channel, err := model.CacheGetRandomSatisfiedChannel(group, playgroundRequest.Model, 0)
 	if err != nil {
-		message := fmt.Sprintf("当前分组 %s 下对于模型 %s 无可用渠道", group, playgroundRequest.Model)
+		message := fmt.Sprintf("No available channel for model %s in current group %s", playgroundRequest.Model, group)
 		openaiErr = service.OpenAIErrorWrapperLocal(errors.New(message), "get_playground_channel_failed", http.StatusInternalServerError)
 		return
 	}

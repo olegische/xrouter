@@ -45,7 +45,7 @@ func relayHandler(c *gin.Context, relayMode int) *dto.OpenAIErrorWithStatusCode 
 	}
 
 	if constant2.ErrorLogEnabled && err != nil {
-		// 保存错误日志到mysql中
+		// Save error log to mysql
 		userId := c.GetInt("id")
 		tokenName := c.GetString("token_name")
 		modelName := c.GetString("original_model")
@@ -84,7 +84,7 @@ func Relay(c *gin.Context) {
 		openaiErr = relayRequest(c, relayMode, channel)
 
 		if openaiErr == nil {
-			return // 成功处理请求，直接返回
+			return // Successfully processed request, return directly
 		}
 
 		go processChannelError(c, channel.Id, channel.Type, channel.Name, channel.GetAutoBan(), openaiErr)
@@ -95,14 +95,14 @@ func Relay(c *gin.Context) {
 	}
 	useChannel := c.GetStringSlice("use_channel")
 	if len(useChannel) > 1 {
-		retryLogStr := fmt.Sprintf("重试：%s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
+		retryLogStr := fmt.Sprintf("Retry: %s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
 		common.LogInfo(c, retryLogStr)
 	}
 
 	if openaiErr != nil {
 		if openaiErr.StatusCode == http.StatusTooManyRequests {
 			common.LogError(c, fmt.Sprintf("origin 429 error: %s", openaiErr.Error.Message))
-			openaiErr.Error.Message = "当前分组上游负载已饱和，请稍后再试"
+			openaiErr.Error.Message = "Current group upstream load is saturated, please try again later"
 		}
 		openaiErr.Error.Message = common.MessageWithRequestId(openaiErr.Error.Message, requestId)
 		c.JSON(openaiErr.StatusCode, gin.H{
@@ -112,14 +112,14 @@ func Relay(c *gin.Context) {
 }
 
 var upgrader = websocket.Upgrader{
-	Subprotocols: []string{"realtime"}, // WS 握手支持的协议，如果有使用 Sec-WebSocket-Protocol，则必须在此声明对应的 Protocol TODO add other protocol
+	Subprotocols: []string{"realtime"}, // WS handshake supported protocols, if using Sec-WebSocket-Protocol, must declare the corresponding Protocol here TODO add other protocol
 	CheckOrigin: func(r *http.Request) bool {
-		return true // 允许跨域
+		return true // Allow cross-origin
 	},
 }
 
 func WssRelay(c *gin.Context) {
-	// 将 HTTP 连接升级为 WebSocket 连接
+	// Upgrade HTTP connection to WebSocket connection
 
 	ws, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	defer ws.Close()
@@ -148,7 +148,7 @@ func WssRelay(c *gin.Context) {
 		openaiErr = wssRequest(c, ws, relayMode, channel)
 
 		if openaiErr == nil {
-			return // 成功处理请求，直接返回
+			return // Successfully processed request, return directly
 		}
 
 		go processChannelError(c, channel.Id, channel.Type, channel.Name, channel.GetAutoBan(), openaiErr)
@@ -159,13 +159,13 @@ func WssRelay(c *gin.Context) {
 	}
 	useChannel := c.GetStringSlice("use_channel")
 	if len(useChannel) > 1 {
-		retryLogStr := fmt.Sprintf("重试：%s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
+		retryLogStr := fmt.Sprintf("Retry: %s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
 		common.LogInfo(c, retryLogStr)
 	}
 
 	if openaiErr != nil {
 		if openaiErr.StatusCode == http.StatusTooManyRequests {
-			openaiErr.Error.Message = "当前分组上游负载已饱和，请稍后再试"
+			openaiErr.Error.Message = "Current group upstream load is saturated, please try again later"
 		}
 		openaiErr.Error.Message = common.MessageWithRequestId(openaiErr.Error.Message, requestId)
 		helper.WssError(c, ws, openaiErr.Error)
@@ -190,7 +190,7 @@ func RelayClaude(c *gin.Context) {
 		claudeErr = claudeRequest(c, channel)
 
 		if claudeErr == nil {
-			return // 成功处理请求，直接返回
+			return // Successfully processed request, return directly
 		}
 
 		openaiErr := service.ClaudeErrorToOpenAIError(claudeErr)
@@ -203,7 +203,7 @@ func RelayClaude(c *gin.Context) {
 	}
 	useChannel := c.GetStringSlice("use_channel")
 	if len(useChannel) > 1 {
-		retryLogStr := fmt.Sprintf("重试：%s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
+		retryLogStr := fmt.Sprintf("Retry: %s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
 		common.LogInfo(c, retryLogStr)
 	}
 
@@ -259,7 +259,7 @@ func getChannel(c *gin.Context, group, originalModel string, retryCount int) (*m
 	}
 	channel, err := model.CacheGetRandomSatisfiedChannel(group, originalModel, retryCount)
 	if err != nil {
-		return nil, errors.New(fmt.Sprintf("获取重试渠道失败: %s", err.Error()))
+		return nil, errors.New(fmt.Sprintf("Failed to get retry channel: %s", err.Error()))
 	}
 	middleware.SetupContextForSelectedChannel(c, channel, originalModel)
 	return channel, nil
@@ -285,7 +285,7 @@ func shouldRetry(c *gin.Context, openaiErr *dto.OpenAIErrorWithStatusCode, retry
 		return true
 	}
 	if openaiErr.StatusCode/100 == 5 {
-		// 超时不重试
+		// Don't retry on timeout
 		if openaiErr.StatusCode == 504 || openaiErr.StatusCode == 524 {
 			return false
 		}
@@ -299,7 +299,7 @@ func shouldRetry(c *gin.Context, openaiErr *dto.OpenAIErrorWithStatusCode, retry
 		return false
 	}
 	if openaiErr.StatusCode == 408 {
-		// azure处理超时不重试
+		// Don't retry on Azure processing timeout
 		return false
 	}
 	if openaiErr.StatusCode/100 == 2 {
@@ -309,7 +309,7 @@ func shouldRetry(c *gin.Context, openaiErr *dto.OpenAIErrorWithStatusCode, retry
 }
 
 func processChannelError(c *gin.Context, channelId int, channelType int, channelName string, autoBan bool, err *dto.OpenAIErrorWithStatusCode) {
-	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
+	// Do not use context to get channel info, there may be inconsistent channel info when processing asynchronously
 	// do not use context to get channel info, there may be inconsistent channel info when processing asynchronously
 	common.LogError(c, fmt.Sprintf("relay error (channel #%d, status code: %d): %s", channelId, err.StatusCode, err.Error.Message))
 	if service.ShouldDisableChannel(channelType, err) && autoBan {
@@ -337,7 +337,7 @@ func RelayMidjourney(c *gin.Context) {
 	if err != nil {
 		statusCode := http.StatusBadRequest
 		if err.Code == 30 {
-			err.Result = "当前分组负载已饱和，请稍后再试，或升级账户以提升服务质量。"
+			err.Result = "Current group load is saturated, please try again later, or upgrade your account to improve service quality."
 			statusCode = http.StatusTooManyRequests
 		}
 		c.JSON(statusCode, gin.H{
@@ -404,12 +404,12 @@ func RelayTask(c *gin.Context) {
 	}
 	useChannel := c.GetStringSlice("use_channel")
 	if len(useChannel) > 1 {
-		retryLogStr := fmt.Sprintf("重试：%s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
+		retryLogStr := fmt.Sprintf("Retry: %s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
 		common.LogInfo(c, retryLogStr)
 	}
 	if taskErr != nil {
 		if taskErr.StatusCode == http.StatusTooManyRequests {
-			taskErr.Message = "当前分组上游负载已饱和，请稍后再试"
+			taskErr.Message = "Current group upstream load is saturated, please try again later"
 		}
 		c.JSON(taskErr.StatusCode, taskErr)
 	}
@@ -443,7 +443,7 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *dto.TaskError,
 		return true
 	}
 	if taskErr.StatusCode/100 == 5 {
-		// 超时不重试
+		// Don't retry on timeout
 		if taskErr.StatusCode == 504 || taskErr.StatusCode == 524 {
 			return false
 		}
@@ -453,7 +453,7 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *dto.TaskError,
 		return false
 	}
 	if taskErr.StatusCode == 408 {
-		// azure处理超时不重试
+		// Don't retry on Azure processing timeout
 		return false
 	}
 	if taskErr.LocalError {

@@ -110,7 +110,7 @@ func FetchUpstreamModels(c *gin.Context) {
 	//if channel.Type != common.ChannelTypeOpenAI {
 	//	c.JSON(http.StatusOK, gin.H{
 	//		"success": false,
-	//		"message": "仅支持 OpenAI 类型渠道",
+	//		"message": "Only OpenAI type channels are supported",
 	//	})
 	//	return
 	//}
@@ -135,7 +135,7 @@ func FetchUpstreamModels(c *gin.Context) {
 	if err = json.Unmarshal(body, &result); err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": fmt.Sprintf("解析响应失败: %s", err.Error()),
+			"message": fmt.Sprintf("Failed to parse response: %s", err.Error()),
 		})
 		return
 	}
@@ -256,7 +256,7 @@ func AddChannel(c *gin.Context) {
 		if channel.Other == "" {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "部署地区不能为空",
+				"message": "Deployment region cannot be empty",
 			})
 			return
 		} else {
@@ -266,7 +266,7 @@ func AddChannel(c *gin.Context) {
 				if regionMap["default"] == nil {
 					c.JSON(http.StatusOK, gin.H{
 						"success": false,
-						"message": "部署地区必须包含default字段",
+						"message": "Deployment region must include a default field",
 					})
 					return
 				}
@@ -287,7 +287,7 @@ func AddChannel(c *gin.Context) {
 			if len(model) > 255 {
 				c.JSON(http.StatusOK, gin.H{
 					"success": false,
-					"message": fmt.Sprintf("模型名称过长: %s", model),
+					"message": fmt.Sprintf("Model name too long: %s", model),
 				})
 				return
 			}
@@ -360,7 +360,7 @@ func DisableTagChannels(c *gin.Context) {
 	if err != nil || channelTag.Tag == "" {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": "参数错误",
+			"message": "Parameter error",
 		})
 		return
 	}
@@ -385,7 +385,7 @@ func EnableTagChannels(c *gin.Context) {
 	if err != nil || channelTag.Tag == "" {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": "参数错误",
+			"message": "Parameter error",
 		})
 		return
 	}
@@ -410,14 +410,14 @@ func EditTagChannels(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": "参数错误",
+			"message": "Parameter error",
 		})
 		return
 	}
 	if channelTag.Tag == "" {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": "tag不能为空",
+			"message": "Tag cannot be empty",
 		})
 		return
 	}
@@ -447,7 +447,7 @@ func DeleteChannelBatch(c *gin.Context) {
 	if err != nil || len(channelBatch.Ids) == 0 {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": "参数错误",
+			"message": "Parameter error",
 		})
 		return
 	}
@@ -481,7 +481,7 @@ func UpdateChannel(c *gin.Context) {
 		if channel.Other == "" {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "部署地区不能为空",
+				"message": "Deployment region cannot be empty",
 			})
 			return
 		} else {
@@ -491,7 +491,7 @@ func UpdateChannel(c *gin.Context) {
 				if regionMap["default"] == nil {
 					c.JSON(http.StatusOK, gin.H{
 						"success": false,
-						"message": "部署地区必须包含default字段",
+						"message": "Deployment region must include a default field",
 					})
 					return
 				}
@@ -601,7 +601,7 @@ func BatchSetChannelTag(c *gin.Context) {
 	if err != nil || len(channelBatch.Ids) == 0 {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": "参数错误",
+			"message": "Parameter error",
 		})
 		return
 	}

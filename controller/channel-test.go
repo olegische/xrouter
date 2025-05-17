@@ -45,18 +45,18 @@ func testChannel(channel *model.Channel, testModel string) (err error, openAIErr
 
 	requestPath := "/v1/chat/completions"
 
-	// 先判断是否为 Embedding 模型
+	// First determine if it's an Embedding model
 	if strings.Contains(strings.ToLower(testModel), "embedding") ||
-		strings.HasPrefix(testModel, "m3e") || // m3e 系列模型
-		strings.Contains(testModel, "bge-") || // bge 系列模型
+		strings.HasPrefix(testModel, "m3e") || // m3e series models
+		strings.Contains(testModel, "bge-") || // bge series models
 		strings.Contains(testModel, "embed") ||
-		channel.Type == common.ChannelTypeMokaAI { // 其他 embedding 模型
-		requestPath = "/v1/embeddings" // 修改请求路径
+		channel.Type == common.ChannelTypeMokaAI { // other embedding models
+		requestPath = "/v1/embeddings" // modify request path
 	}
 
 	c.Request = &http.Request{
 		Method: "POST",
-		URL:    &url.URL{Path: requestPath}, // 使用动态路径
+		URL:    &url.URL{Path: requestPath}, // use dynamic path
 		Body:   nil,
 		Header: make(http.Header),
 	}
@@ -103,7 +103,7 @@ func testChannel(channel *model.Channel, testModel string) (err error, openAIErr
 	}
 
 	request := buildTestRequest(testModel)
-	// 创建一个用于日志的 info 副本，移除 ApiKey
+	// Create a copy of info for logging, remove ApiKey
 	logInfo := *info
 	logInfo.ApiKey = ""
 	common.SysLog(fmt.Sprintf("testing channel %d with model %s , info %+v ", channel.Id, testModel, logInfo))
@@ -167,8 +167,8 @@ func testChannel(channel *model.Channel, testModel string) (err error, openAIErr
 	consumedTime := float64(milliseconds) / 1000.0
 	other := service.GenerateTextOtherInfo(c, info, priceData.ModelRatio, priceData.GroupRatio, priceData.CompletionRatio,
 		usage.PromptTokensDetails.CachedTokens, priceData.CacheRatio, priceData.ModelPrice)
-	model.RecordConsumeLog(c, 1, channel.Id, usage.PromptTokens, usage.CompletionTokens, info.OriginModelName, "模型测试",
-		quota, "模型测试", 0, quota, int(consumedTime), false, info.Group, other)
+	model.RecordConsumeLog(c, 1, channel.Id, usage.PromptTokens, usage.CompletionTokens, info.OriginModelName, "Model test",
+		quota, "Model test", 0, quota, int(consumedTime), false, info.Group, other)
 	common.SysLog(fmt.Sprintf("testing channel #%d, response: \n%s", channel.Id, string(respBody)))
 	return nil, nil
 }
@@ -179,16 +179,16 @@ func buildTestRequest(model string) *dto.GeneralOpenAIRequest {
 		Stream: false,
 	}
 
-	// 先判断是否为 Embedding 模型
-	if strings.Contains(strings.ToLower(model), "embedding") || // 其他 embedding 模型
-		strings.HasPrefix(model, "m3e") || // m3e 系列模型
+	// First determine if it's an Embedding model
+	if strings.Contains(strings.ToLower(model), "embedding") || // other embedding models
+		strings.HasPrefix(model, "m3e") || // m3e series models
 		strings.Contains(model, "bge-") {
 		testRequest.Model = model
-		// Embedding 请求
+		// Embedding request
 		testRequest.Input = []string{"hello world"}
 		return testRequest
 	}
-	// 并非Embedding 模型
+	// Not an Embedding model
 	if strings.HasPrefix(model, "o") {
 		testRequest.MaxCompletionTokens = 10
 	} else if strings.Contains(model, "thinking") {
@@ -258,7 +258,7 @@ func testAllChannels(notify bool) error {
 	testAllChannelsLock.Lock()
 	if testAllChannelsRunning {
 		testAllChannelsLock.Unlock()
-		return errors.New("测试已在运行中")
+		return errors.New("Test is already running")
 	}
 	testAllChannelsRunning = true
 	testAllChannelsLock.Unlock()
@@ -288,7 +288,7 @@ func testAllChannels(notify bool) error {
 			}
 
 			if milliseconds > disableThreshold {
-				err = errors.New(fmt.Sprintf("响应时间 %.2fs 超过阈值 %.2fs", float64(milliseconds)/1000.0, float64(disableThreshold)/1000.0))
+				err = errors.New(fmt.Sprintf("Response time %.2fs exceeds threshold %.2fs", float64(milliseconds)/1000.0, float64(disableThreshold)/1000.0))
 				shouldBanChannel = true
 			}
 
@@ -309,7 +309,7 @@ func testAllChannels(notify bool) error {
 		testAllChannelsRunning = false
 		testAllChannelsLock.Unlock()
 		if notify {
-			service.NotifyRootUser(dto.NotifyTypeChannelTest, "通道测试完成", "所有通道测试已完成")
+			service.NotifyRootUser(dto.NotifyTypeChannelTest, "Channel test completed", "All channel tests have been completed")
 		}
 	})
 	return nil

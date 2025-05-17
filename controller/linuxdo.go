@@ -30,7 +30,7 @@ func LinuxDoBind(c *gin.Context) {
 	if !common.LinuxDOOAuthEnabled {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": "管理员未开启通过 Linux DO 登录以及注册",
+			"message": "Administrator has not enabled login and registration through Linux DO",
 		})
 		return
 	}
@@ -52,7 +52,7 @@ func LinuxDoBind(c *gin.Context) {
 	if model.IsLinuxDOIdAlreadyTaken(user.LinuxDOId) {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": "该 Linux DO 账户已被绑定",
+			"message": "This Linux DO account has already been bound",
 		})
 		return
 	}
@@ -194,7 +194,7 @@ func LinuxdoOAuth(c *gin.Context) {
 	if !common.LinuxDOOAuthEnabled {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
-			"message": "管理员未开启通过 Linux DO 登录以及注册",
+			"message": "Administrator has not enabled login and registration through Linux DO",
 		})
 		return
 	}
@@ -226,7 +226,7 @@ func LinuxdoOAuth(c *gin.Context) {
 		if user.Id == 0 {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "用户已注销",
+				"message": "User has been deactivated",
 			})
 			return
 		}
@@ -253,7 +253,7 @@ func LinuxdoOAuth(c *gin.Context) {
 		} else {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
-				"message": "管理员关闭了新用户注册",
+				"message": "Administrator has disabled new user registration",
 			})
 			return
 		}
@@ -261,7 +261,7 @@ func LinuxdoOAuth(c *gin.Context) {
 
 	if user.Status != common.UserStatusEnabled {
 		c.JSON(http.StatusOK, gin.H{
-			"message": "用户已被封禁",
+			"message": "User has been banned",
 			"success": false,
 		})
 		return

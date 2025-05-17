@@ -29,13 +29,13 @@ func UpdateMidjourneyTaskBulk() {
 			continue
 		}
 
-		common.LogInfo(ctx, fmt.Sprintf("检测到未完成的任务数有: %v", len(tasks)))
+		common.LogInfo(ctx, fmt.Sprintf("Detected number of incomplete tasks: %v", len(tasks)))
 		taskChannelM := make(map[int][]string)
 		taskM := make(map[string]*model.Midjourney)
 		nullTaskIds := make([]int, 0)
 		for _, task := range tasks {
 			if task.MjId == "" {
-				// 统计失败的未完成任务
+				// Count failed incomplete tasks
 				nullTaskIds = append(nullTaskIds, task.Id)
 				continue
 			}
@@ -58,7 +58,7 @@ func UpdateMidjourneyTaskBulk() {
 		}
 
 		for channelId, taskIds := range taskChannelM {
-			common.LogInfo(ctx, fmt.Sprintf("渠道 #%d 未完成的任务有: %d", channelId, len(taskIds)))
+			common.LogInfo(ctx, fmt.Sprintf("Channel #%d has incomplete tasks: %d", channelId, len(taskIds)))
 			if len(taskIds) == 0 {
 				continue
 			}
@@ -66,7 +66,7 @@ func UpdateMidjourneyTaskBulk() {
 			if err != nil {
 				common.LogError(ctx, fmt.Sprintf("CacheGetChannel: %v", err))
 				err := model.MjBulkUpdate(taskIds, map[string]any{
-					"fail_reason": fmt.Sprintf("获取渠道信息失败，请联系管理员，渠道ID：%d", channelId),
+					"fail_reason": fmt.Sprintf("Failed to get channel information, please contact administrator, Channel ID: %d", channelId),
 					"status":      "FAILURE",
 					"progress":    "100%",
 				})
@@ -85,10 +85,10 @@ func UpdateMidjourneyTaskBulk() {
 				common.LogError(ctx, fmt.Sprintf("Get Task error: %v", err))
 				continue
 			}
-			// 设置超时时间
+			// Set timeout
 			timeout := time.Second * 15
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
-			// 使用带有超时的 context 创建新的请求
+			// Create a new request with a timeout context
 			req = req.WithContext(ctx)
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("mj-api-secret", midjourneyChannel.Key)
@@ -120,9 +120,9 @@ func UpdateMidjourneyTaskBulk() {
 				task := taskM[responseItem.MjId]
 
 				useTime := (time.Now().UnixNano() / int64(time.Millisecond)) - task.SubmitTime
-				// 如果时间超过一小时，且进度不是100%，则认为任务失败
+				// If time exceeds one hour and progress is not 100%, consider the task failed
 				if useTime > 3600000 && task.Progress != "100%" {
-					responseItem.FailReason = "上游任务超时（超过1小时）"
+					responseItem.FailReason = "Upstream task timeout (over 1 hour)"
 					responseItem.Status = "FAILURE"
 				}
 				if !checkMjTaskNeedUpdate(task, responseItem) {
@@ -148,7 +148,7 @@ func UpdateMidjourneyTaskBulk() {
 				}
 				shouldReturnQuota := false
 				if (task.Progress != "100%" && responseItem.FailReason != "") || (task.Progress == "100%" && task.Status == "FAILURE") {
-					common.LogInfo(ctx, task.MjId+" 构建失败，"+task.FailReason)
+					common.LogInfo(ctx, task.MjId+" Build failed, "+task.FailReason)
 					task.Progress = "100%"
 					if task.Quota != 0 {
 						shouldReturnQuota = true
@@ -163,7 +163,7 @@ func UpdateMidjourneyTaskBulk() {
 						if err != nil {
 							common.LogError(ctx, "fail to increase user quota: "+err.Error())
 						}
-						logContent := fmt.Sprintf("构图失败 %s，补偿 %s", task.MjId, common.LogQuota(task.Quota))
+						logContent := fmt.Sprintf("Image generation failed %s, compensation %s", task.MjId, common.LogQuota(task.Quota))
 						model.RecordLog(task.UserId, model.LogTypeSystem, logContent)
 					}
 				}
@@ -219,7 +219,7 @@ func GetAllMidjourney(c *gin.Context) {
 		p = 0
 	}
 
-	// 解析其他查询参数
+	// Parse other query parameters
 	queryParams := model.TaskQueryParams{
 		ChannelID:      c.Query("channel_id"),
 		MjID:           c.Query("mj_id"),
