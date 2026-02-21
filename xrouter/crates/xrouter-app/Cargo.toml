@@ -1,0 +1,28 @@
+[package]
+name = "xrouter-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+billing = ["xrouter-core/billing", "xrouter-clients-usage/billing"]
+
+[dependencies]
+axum.workspace = true
+dotenvy.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tracing.workspace = true
+xrouter-clients-openai = { path = "../xrouter-clients-openai" }
+xrouter-clients-usage = { path = "../xrouter-clients-usage", default-features = false }
+xrouter-contracts = { path = "../xrouter-contracts" }
+xrouter-core = { path = "../xrouter-core", default-features = false }
+xrouter-observability = { path = "../xrouter-observability" }
+
+[dev-dependencies]
+tower.workspace = true

@@ -1,0 +1,9 @@
+[package]
+name = "xrouter-clients-openai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+xrouter-core = { path = "../xrouter-core" }
