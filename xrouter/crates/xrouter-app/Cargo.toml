@@ -21,6 +21,7 @@ tracing.workspace = true
 utoipa.workspace = true
 utoipa-swagger-ui.workspace = true
 uuid.workspace = true
+ureq.workspace = true
 xrouter-clients-openai = { path = "../xrouter-clients-openai" }
 xrouter-clients-usage = { path = "../xrouter-clients-usage", default-features = false }
 xrouter-contracts = { path = "../xrouter-contracts" }

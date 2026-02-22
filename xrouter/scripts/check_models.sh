@@ -19,7 +19,18 @@ API_KEY="${API_KEY:-}"
 BASE_URL="http://${HOST}:${PORT}"
 
 case "$provider" in
-  openrouter) expected_model="openrouter/anthropic/claude-3.5-sonnet" ;;
+  openrouter)
+    if [[ -n "${OPENROUTER_SUPPORTED_MODELS:-}" ]]; then
+      expected_model="$(echo "$OPENROUTER_SUPPORTED_MODELS" \
+        | sed -E 's/^\[//; s/\]$//' \
+        | awk -F',' '{print $1}' \
+        | tr -d '"[:space:]')"
+      if [[ -n "$expected_model" && "$expected_model" != openrouter/* ]]; then
+        expected_model="openrouter/$expected_model"
+      fi
+    fi
+    expected_model="${expected_model:-openrouter/anthropic/claude-haiku-4.5}"
+    ;;
   deepseek) expected_model="deepseek/deepseek-chat" ;;
   gigachat) expected_model="gigachat/GigaChat-2-Max" ;;
   yandex) expected_model="yandex/yandexgpt-32k" ;;

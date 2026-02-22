@@ -24,7 +24,9 @@ use xrouter_contracts::{
     ChatCompletionsRequest, ChatCompletionsResponse, ResponseEvent, ResponseOutputItem,
     ResponsesRequest, ResponsesResponse,
 };
-use xrouter_core::{CoreError, ExecutionEngine, ModelDescriptor, default_model_catalog};
+use xrouter_core::{
+    CoreError, ExecutionEngine, ModelDescriptor, default_model_catalog, synthesize_model_id,
+};
 
 pub mod config;
 
@@ -49,6 +51,8 @@ struct CompatibleModelsResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 struct ModelArchitecture {
+    tokenizer: String,
+    instruct_type: String,
     modality: String,
 }
 
@@ -61,8 +65,18 @@ struct ModelTopProvider {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 struct ModelPerRequestLimits {
-    prompt_tokens: u32,
-    completion_tokens: u32,
+    prompt_tokens: Option<u32>,
+    completion_tokens: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct ModelPricing {
+    prompt: String,
+    completion: String,
+    request: String,
+    image: String,
+    web_search: String,
+    internal_reasoning: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -70,6 +84,8 @@ struct XrouterModelEntry {
     id: String,
     name: String,
     description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pricing: Option<ModelPricing>,
     context_length: u32,
     architecture: ModelArchitecture,
     top_provider: ModelTopProvider,
@@ -101,6 +117,7 @@ struct ErrorResponse {
             ModelArchitecture,
             ModelTopProvider,
             ModelPerRequestLimits,
+            ModelPricing,
             XrouterModelEntry,
             XrouterModelsResponse,
             ResponsesRequest,
@@ -141,9 +158,171 @@ struct XrouterApiDoc;
 )]
 struct OpenAiApiDoc;
 
+#[derive(Debug, Deserialize)]
+struct OpenRouterModelsResponse {
+    #[serde(default)]
+    data: Vec<OpenRouterModelData>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterModelData {
+    id: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    context_length: u32,
+    #[serde(default)]
+    architecture: OpenRouterArchitecture,
+    #[serde(default)]
+    top_provider: OpenRouterTopProvider,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterArchitecture {
+    #[serde(default = "default_modality")]
+    modality: String,
+    #[serde(default)]
+    tokenizer: Option<String>,
+    #[serde(default)]
+    instruct_type: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct OpenRouterTopProvider {
+    context_length: Option<u32>,
+    max_completion_tokens: Option<u32>,
+    is_moderated: Option<bool>,
+}
+
+fn default_modality() -> String {
+    "text->text".to_string()
+}
+
+impl Default for OpenRouterArchitecture {
+    fn default() -> Self {
+        Self { modality: default_modality(), tokenizer: None, instruct_type: None }
+    }
+}
+
+fn fetch_openrouter_models(
+    provider_config: &config::ProviderConfig,
+    supported_ids: &[String],
+) -> Option<Vec<ModelDescriptor>> {
+    let base_url = provider_config
+        .base_url
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("https://openrouter.ai/api/v1")
+        .trim_end_matches('/')
+        .to_string();
+    if base_url.is_empty() {
+        return None;
+    }
+
+    let url = format!("{base_url}/models");
+    let mut request = ureq::get(url.as_str()).set("Accept", "application/json");
+    if let Some(api_key) = provider_config.api_key.as_deref() {
+        request = request.set("Authorization", &format!("Bearer {api_key}"));
+    }
+
+    let response = request.call();
+    let payload = match response {
+        Ok(ok) => match ok.into_json::<OpenRouterModelsResponse>() {
+            Ok(payload) => payload,
+            Err(err) => {
+                warn!(
+                    event = "openrouter.models.fetch.failed",
+                    reason = "invalid_json",
+                    error = %err
+                );
+                return None;
+            }
+        },
+        Err(err) => {
+            warn!(
+                event = "openrouter.models.fetch.failed",
+                reason = "request_failed",
+                error = %err
+            );
+            return None;
+        }
+    };
+
+    Some(map_openrouter_models(payload, supported_ids))
+}
+
+fn map_openrouter_models(
+    payload: OpenRouterModelsResponse,
+    supported_ids: &[String],
+) -> Vec<ModelDescriptor> {
+    let supported = supported_ids.iter().cloned().collect::<HashSet<_>>();
+    payload
+        .data
+        .into_iter()
+        .filter(|model| supported.contains(&model.id))
+        .map(|model| {
+            let context_length = if model.context_length > 0 { model.context_length } else { 4096 };
+            let top_context_length = model.top_provider.context_length.unwrap_or(context_length);
+            let max_completion_tokens = model.top_provider.max_completion_tokens.unwrap_or(4096);
+            ModelDescriptor {
+                id: model.id.clone(),
+                provider: "openrouter".to_string(),
+                description: if model.description.is_empty() {
+                    format!("{} via OpenRouter", model.id)
+                } else {
+                    model.description
+                },
+                context_length,
+                tokenizer: model.architecture.tokenizer.unwrap_or_else(|| {
+                    if model.id.contains("anthropic/") {
+                        "anthropic".to_string()
+                    } else if model.id.contains("google/") {
+                        "google".to_string()
+                    } else {
+                        "unknown".to_string()
+                    }
+                }),
+                instruct_type: model
+                    .architecture
+                    .instruct_type
+                    .unwrap_or_else(|| "none".to_string()),
+                modality: model.architecture.modality,
+                top_provider_context_length: top_context_length,
+                is_moderated: model.top_provider.is_moderated.unwrap_or(true),
+                max_completion_tokens,
+            }
+        })
+        .collect::<Vec<_>>()
+}
+
+fn fallback_openrouter_models(model_ids: &[String]) -> Vec<ModelDescriptor> {
+    model_ids
+        .iter()
+        .map(|id| ModelDescriptor {
+            id: id.clone(),
+            provider: "openrouter".to_string(),
+            description: format!("{id} via OpenRouter"),
+            context_length: 128_000,
+            tokenizer: if id.contains("anthropic/") {
+                "anthropic".to_string()
+            } else if id.contains("google/") {
+                "google".to_string()
+            } else {
+                "unknown".to_string()
+            },
+            instruct_type: "none".to_string(),
+            modality: "text->text".to_string(),
+            top_provider_context_length: 128_000,
+            is_moderated: true,
+            max_completion_tokens: 16_384,
+        })
+        .collect()
+}
+
 #[derive(Clone)]
 pub struct AppState {
     openai_compatible_api: bool,
+    billing_enabled: bool,
     default_provider: String,
     models: Vec<ModelDescriptor>,
     engines: HashMap<String, Arc<ExecutionEngine>>,
@@ -186,10 +365,37 @@ impl AppState {
             providers = ?engines.keys().collect::<Vec<_>>()
         );
 
-        let models = default_model_catalog()
+        let mut models = default_model_catalog()
             .into_iter()
-            .filter(|entry| enabled_providers.contains(&entry.provider))
+            .filter(|entry| {
+                enabled_providers.contains(&entry.provider) && entry.provider != "openrouter"
+            })
             .collect::<Vec<_>>();
+
+        if enabled_providers.contains("openrouter")
+            && let Some(openrouter_config) = config.providers.get("openrouter")
+        {
+            if cfg!(test) {
+                models.extend(fallback_openrouter_models(&config.openrouter_supported_models));
+            } else if let Some(fetched) =
+                fetch_openrouter_models(openrouter_config, &config.openrouter_supported_models)
+            {
+                info!(
+                    event = "openrouter.models.loaded",
+                    source = "remote",
+                    model_count = fetched.len()
+                );
+                models.extend(fetched);
+            } else {
+                warn!(
+                    event = "openrouter.models.loaded",
+                    source = "fallback",
+                    reason = "fetch_failed",
+                    model_count = config.openrouter_supported_models.len()
+                );
+                models.extend(fallback_openrouter_models(&config.openrouter_supported_models));
+            }
+        }
         info!(event = "models.registry.loaded", model_count = models.len());
         debug!(
             event = "models.registry.entries",
@@ -207,6 +413,7 @@ impl AppState {
 
         Self {
             openai_compatible_api: config.openai_compatible_api,
+            billing_enabled: config.billing_enabled,
             default_provider,
             models,
             engines,
@@ -227,8 +434,22 @@ impl AppState {
         if let Some(found) = self.models.iter().find(|m| m.id == model) {
             return found.provider.clone();
         }
+        if let Some(found) =
+            self.models.iter().find(|m| synthesize_model_id(&m.provider, &m.id) == model)
+        {
+            return found.provider.clone();
+        }
 
         self.default_provider.clone()
+    }
+
+    fn resolve_provider_model_id(&self, model: &str) -> String {
+        if let Some((provider, provider_model)) = model.split_once('/')
+            && self.engines.contains_key(provider)
+        {
+            return provider_model.to_string();
+        }
+        model.to_string()
     }
 
     fn resolve_engine(&self, model: &str) -> Result<Arc<ExecutionEngine>, CoreError> {
@@ -312,7 +533,7 @@ async fn get_compatible_models(State(state): State<AppState>) -> Json<Compatible
         .models
         .iter()
         .map(|m| CompatibleModelEntry {
-            id: m.id.clone(),
+            id: synthesize_model_id(&m.provider, &m.id),
             object: "model".to_string(),
             created: 1_710_979_200,
             owned_by: m.provider.clone(),
@@ -343,19 +564,31 @@ async fn get_xrouter_models(State(state): State<AppState>) -> Json<XrouterModels
         .models
         .iter()
         .map(|m| XrouterModelEntry {
-            id: m.id.clone(),
-            name: m.id.clone(),
+            id: synthesize_model_id(&m.provider, &m.id),
+            name: synthesize_model_id(&m.provider, &m.id),
             description: m.description.clone(),
+            pricing: state.billing_enabled.then(|| ModelPricing {
+                prompt: "0".to_string(),
+                completion: "0".to_string(),
+                request: "0".to_string(),
+                image: "0".to_string(),
+                web_search: "0".to_string(),
+                internal_reasoning: "0".to_string(),
+            }),
             context_length: m.context_length,
-            architecture: ModelArchitecture { modality: "text->text".to_string() },
+            architecture: ModelArchitecture {
+                tokenizer: m.tokenizer.clone(),
+                instruct_type: m.instruct_type.clone(),
+                modality: m.modality.clone(),
+            },
             top_provider: ModelTopProvider {
-                context_length: m.context_length,
+                context_length: m.top_provider_context_length,
                 max_completion_tokens: m.max_completion_tokens,
-                is_moderated: true,
+                is_moderated: m.is_moderated,
             },
             per_request_limits: ModelPerRequestLimits {
-                prompt_tokens: m.context_length.saturating_sub(1024),
-                completion_tokens: m.max_completion_tokens,
+                prompt_tokens: None,
+                completion_tokens: Some(m.max_completion_tokens),
             },
         })
         .collect::<Vec<_>>();
@@ -380,15 +613,18 @@ async fn get_xrouter_models(State(state): State<AppState>) -> Json<XrouterModels
 )]
 async fn post_responses(
     State(state): State<AppState>,
-    Json(request): Json<ResponsesRequest>,
+    Json(mut request): Json<ResponsesRequest>,
 ) -> Response {
     let started_at = Instant::now();
     let request_model = request.model.clone();
     let provider = state.resolve_provider_key(&request.model);
+    let provider_model = state.resolve_provider_model_id(&request.model);
+    let public_model_id = synthesize_model_id(&provider, &provider_model);
+    request.model = provider_model;
     info!(
         event = "http.request.received",
         route = "/api/v1/responses",
-        model = %request.model,
+        model = %public_model_id,
         provider = %provider,
         stream = request.stream,
         input_chars = request.input.len()
@@ -407,7 +643,7 @@ async fn post_responses(
             warn!(
                 event = "http.request.failed",
                 route = "/api/v1/responses",
-                model = %request.model,
+                model = %public_model_id,
                 provider = %provider,
                 stream = request.stream,
                 duration_ms = started_at.elapsed().as_millis() as u64,
@@ -423,7 +659,7 @@ async fn post_responses(
             event = "http.stream.started",
             route = "/api/v1/responses",
             response_id = %response_id,
-            model = %request.model,
+            model = %public_model_id,
             provider = %provider
         );
         let created = json!({
@@ -432,7 +668,7 @@ async fn post_responses(
                 "id": response_id,
                 "object": "response",
                 "status": "in_progress",
-                "model": request.model,
+                "model": public_model_id,
                 "output": []
             }
         });
@@ -590,13 +826,16 @@ async fn post_chat_completions(
         .map(|message| format!("{}:{}", message.role, message.content))
         .collect::<Vec<_>>()
         .join("\n");
-    let core_request = request.clone().into_responses_request();
+    let mut core_request = request.clone().into_responses_request();
     let request_model = core_request.model.clone();
     let provider = state.resolve_provider_key(&core_request.model);
+    let provider_model = state.resolve_provider_model_id(&core_request.model);
+    let public_model_id = synthesize_model_id(&provider, &provider_model);
+    core_request.model = provider_model;
     info!(
         event = "http.request.received",
         route = "/api/v1/chat/completions",
-        model = %core_request.model,
+        model = %public_model_id,
         provider = %provider,
         stream = request.stream,
         message_count = request.messages.len()
@@ -614,7 +853,7 @@ async fn post_chat_completions(
             warn!(
                 event = "http.request.failed",
                 route = "/api/v1/chat/completions",
-                model = %core_request.model,
+                model = %public_model_id,
                 provider = %provider,
                 duration_ms = started_at.elapsed().as_millis() as u64,
                 error = %err
@@ -628,7 +867,7 @@ async fn post_chat_completions(
         info!(
             event = "http.stream.started",
             route = "/api/v1/chat/completions",
-            model = %core_request.model,
+            model = %public_model_id,
             provider = %provider
         );
         let stream_provider = provider.clone();
@@ -889,6 +1128,52 @@ mod tests {
         }
     }
 
+    #[test]
+    fn map_openrouter_models_uses_provider_payload_fields() {
+        let payload: OpenRouterModelsResponse = serde_json::from_value(json!({
+            "data": [{
+                "id": "openai/gpt-5.2",
+                "description": "OpenAI GPT-5.2 via OpenRouter",
+                "context_length": 222000,
+                "architecture": {"modality": "text->text"},
+                "top_provider": {
+                    "context_length": 210000,
+                    "max_completion_tokens": 12345,
+                    "is_moderated": false
+                }
+            }, {
+                "id": "ignore/me",
+                "description": "ignored",
+                "context_length": 1
+            }]
+        }))
+        .expect("payload must deserialize");
+
+        let models = map_openrouter_models(payload, &["openai/gpt-5.2".to_string()]);
+        assert_eq!(models.len(), 1);
+        let model = &models[0];
+        assert_eq!(model.id, "openai/gpt-5.2");
+        assert_eq!(model.description, "OpenAI GPT-5.2 via OpenRouter");
+        assert_eq!(model.context_length, 222000);
+        assert_eq!(model.top_provider_context_length, 210000);
+        assert_eq!(model.max_completion_tokens, 12345);
+        assert!(!model.is_moderated);
+        assert_eq!(model.modality, "text->text");
+        assert_eq!(model.tokenizer, "unknown");
+        assert_eq!(model.instruct_type, "none");
+    }
+
+    #[test]
+    fn fetch_openrouter_models_returns_none_when_request_fails() {
+        let provider = crate::config::ProviderConfig {
+            enabled: true,
+            api_key: None,
+            base_url: Some("http://127.0.0.1:0".to_string()),
+        };
+        let models = fetch_openrouter_models(&provider, &["openai/gpt-5.2".to_string()]);
+        assert!(models.is_none());
+    }
+
     fn assert_snapshot(name: &str, actual: &str, expected: &str) {
         let actual = actual.trim();
         let expected = expected.trim();
@@ -1088,7 +1373,7 @@ path=/api/v1/models
 "#,
                 r#"
 status=200
-json.data_len=9
+json.data_len=48
 json.first_id=<id>
 "#,
             ),
@@ -1174,7 +1459,7 @@ path=/v1/models
 "#,
                 r#"
 status=200
-json.data_len=9
+json.data_len=48
 json.first_id=<id>
 "#,
             ),
@@ -1226,6 +1511,57 @@ json.data_len=0
 json.first_id=<none>
 "#,
         );
+    }
+
+    #[tokio::test]
+    async fn models_response_omits_pricing_when_billing_disabled() {
+        let app = build_router(test_app_state(false));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/models")
+                    .body(Body::empty())
+                    .expect("request must build"),
+            )
+            .await
+            .expect("request must complete");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body read must succeed");
+        let payload: Value =
+            serde_json::from_slice(&body).expect("response body must be valid json");
+        let first = payload["data"][0].as_object().expect("first model must be object");
+        assert!(!first.contains_key("pricing"));
+    }
+
+    #[tokio::test]
+    async fn models_response_includes_pricing_when_billing_enabled() {
+        let mut config = crate::config::AppConfig::for_tests();
+        config.billing_enabled = true;
+        let app = build_router(AppState::from_config(&config));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/models")
+                    .body(Body::empty())
+                    .expect("request must build"),
+            )
+            .await
+            .expect("request must complete");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body read must succeed");
+        let payload: Value =
+            serde_json::from_slice(&body).expect("response body must be valid json");
+        let pricing = &payload["data"][0]["pricing"];
+        assert_eq!(pricing["prompt"], "0");
+        assert_eq!(pricing["completion"], "0");
     }
 
     #[tokio::test]
