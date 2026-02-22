@@ -13,7 +13,7 @@ impl OpenAiCompatibleClient {
 
 #[async_trait]
 impl ProviderClient for OpenAiCompatibleClient {
-    async fn generate(&self, _model: &str, input: &str) -> Result<ProviderOutcome, CoreError> {
+    async fn generate(&self, model: &str, input: &str) -> Result<ProviderOutcome, CoreError> {
         let mut chunks = Vec::new();
         let mut output_tokens = 0u32;
 
@@ -27,6 +27,12 @@ impl ProviderClient for OpenAiCompatibleClient {
         }
 
         chunks.insert(0, format!("[{}] ", self.provider_id));
-        Ok(ProviderOutcome { chunks, output_tokens })
+        let reasoning = if model.contains("deepseek-reasoner") {
+            Some("Reasoned with DeepSeek reasoning mode before composing final answer.".to_string())
+        } else {
+            None
+        };
+
+        Ok(ProviderOutcome { chunks, output_tokens, reasoning })
     }
 }

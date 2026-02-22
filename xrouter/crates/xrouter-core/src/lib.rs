@@ -1,11 +1,14 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::{info_span, Instrument};
+use tracing::{Instrument, error, info, info_span, warn};
 use uuid::Uuid;
-use xrouter_contracts::{ResponseEvent, ResponsesRequest, ResponsesResponse, StageName, Usage};
+use xrouter_contracts::{
+    ResponseEvent, ResponseOutputItem, ResponseOutputText, ResponseReasoningSummary,
+    ResponsesRequest, ResponsesResponse, StageName, ToolCall, ToolFunction, Usage,
+};
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum CoreError {
@@ -48,6 +51,7 @@ pub struct ExecutionContext {
     pub model: String,
     pub input: String,
     pub output_text: String,
+    pub reasoning: Option<String>,
     pub input_tokens: u32,
     pub output_tokens: u32,
 }
@@ -70,6 +74,7 @@ impl ExecutionContext {
             model: request.model,
             input: request.input,
             output_text: String::new(),
+            reasoning: None,
             input_tokens: 0,
             output_tokens: 0,
         }
@@ -80,6 +85,88 @@ impl ExecutionContext {
 pub struct ProviderOutcome {
     pub chunks: Vec<String>,
     pub output_tokens: u32,
+    pub reasoning: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelDescriptor {
+    pub id: String,
+    pub provider: String,
+    pub description: String,
+    pub context_length: u32,
+    pub max_completion_tokens: u32,
+}
+
+pub fn default_model_catalog() -> Vec<ModelDescriptor> {
+    vec![
+        ModelDescriptor {
+            id: "gpt-4.1-mini".to_string(),
+            provider: "openrouter".to_string(),
+            description: "OpenRouter default chat model".to_string(),
+            context_length: 128_000,
+            max_completion_tokens: 16_384,
+        },
+        ModelDescriptor {
+            id: "openrouter/anthropic/claude-3.5-sonnet".to_string(),
+            provider: "openrouter".to_string(),
+            description: "Anthropic Claude 3.5 Sonnet via OpenRouter".to_string(),
+            context_length: 200_000,
+            max_completion_tokens: 8_192,
+        },
+        ModelDescriptor {
+            id: "deepseek/deepseek-chat".to_string(),
+            provider: "deepseek".to_string(),
+            description:
+                "General-purpose DeepSeek model for everyday chat, coding, and content tasks."
+                    .to_string(),
+            context_length: 128_000,
+            max_completion_tokens: 8_192,
+        },
+        ModelDescriptor {
+            id: "deepseek/deepseek-reasoner".to_string(),
+            provider: "deepseek".to_string(),
+            description:
+                "Reasoning-focused DeepSeek model for complex math, logic, and multi-step analysis."
+                    .to_string(),
+            context_length: 128_000,
+            max_completion_tokens: 64_000,
+        },
+        ModelDescriptor {
+            id: "gigachat/GigaChat-2-Max".to_string(),
+            provider: "gigachat".to_string(),
+            description: "GigaChat 2 Max".to_string(),
+            context_length: 32_768,
+            max_completion_tokens: 8_192,
+        },
+        ModelDescriptor {
+            id: "yandex/yandexgpt-32k".to_string(),
+            provider: "yandex".to_string(),
+            description: "YandexGPT 32K".to_string(),
+            context_length: 32_768,
+            max_completion_tokens: 8_192,
+        },
+        ModelDescriptor {
+            id: "ollama/llama3.1:8b".to_string(),
+            provider: "ollama".to_string(),
+            description: "Llama 3.1 8B via Ollama".to_string(),
+            context_length: 8_192,
+            max_completion_tokens: 4_096,
+        },
+        ModelDescriptor {
+            id: "zai/glm-4.5".to_string(),
+            provider: "zai".to_string(),
+            description: "Z.AI GLM-4.5".to_string(),
+            context_length: 128_000,
+            max_completion_tokens: 8_192,
+        },
+        ModelDescriptor {
+            id: "xrouter/gpt-4.1-mini".to_string(),
+            provider: "xrouter".to_string(),
+            description: "XRouter GPT-4.1 mini".to_string(),
+            context_length: 128_000,
+            max_completion_tokens: 16_384,
+        },
+    ]
 }
 
 #[async_trait]
@@ -183,13 +270,50 @@ impl StageHandler for GenerateHandler {
             ));
         }
 
-        let result = self.provider.generate(&context.model, &context.input).await?;
+        info!(
+            event = "provider.request.started",
+            provider_model = %context.model,
+            input_chars = context.input.len()
+        );
+        let provider_started_at = Instant::now();
+        let result = match self.provider.generate(&context.model, &context.input).await {
+            Ok(result) => result,
+            Err(error) => {
+                warn!(
+                    event = "provider.request.failed",
+                    provider_model = %context.model,
+                    duration_ms = provider_started_at.elapsed().as_millis() as u64,
+                    error = %error
+                );
+                return Err(error);
+            }
+        };
+        info!(
+            event = "provider.request.completed",
+            provider_model = %context.model,
+            output_tokens = result.output_tokens,
+            chunk_count = result.chunks.len(),
+            duration_ms = provider_started_at.elapsed().as_millis() as u64
+        );
 
         context.output_tokens = result.output_tokens;
         context.billable_tokens = result.output_tokens;
+        context.reasoning = result.reasoning;
+        if context.client_connected
+            && let (Some(reasoning), Some(sender)) = (&context.reasoning, &self.sender)
+        {
+            let _ = sender
+                .send(Ok(ResponseEvent::ReasoningDelta {
+                    id: context.request_id.clone(),
+                    delta: reasoning.clone(),
+                }))
+                .await;
+        }
         for chunk in result.chunks {
             context.output_text.push_str(&chunk);
-            if context.client_connected && let Some(sender) = &self.sender {
+            if context.client_connected
+                && let Some(sender) = &self.sender
+            {
                 let _ = sender
                     .send(Ok(ResponseEvent::OutputTextDelta {
                         id: context.request_id.clone(),
@@ -261,6 +385,70 @@ pub struct ExecutionEngine {
     billing_enabled: bool,
 }
 
+fn tool_call_id_from_response_id(response_id: &str) -> String {
+    let suffix = response_id.strip_prefix("resp_").unwrap_or(response_id);
+    format!("call_{suffix}")
+}
+
+fn parse_tool_call(output_text: &str, response_id: &str) -> Option<ToolCall> {
+    let marker = "TOOL_CALL:";
+    let marker_idx = output_text.find(marker)?;
+    let payload = output_text.get(marker_idx + marker.len()..)?.trim();
+    let (name_raw, args_raw) = payload.split_once(':')?;
+    let name = name_raw.trim();
+    let arguments = args_raw.trim();
+
+    if name.is_empty() || arguments.is_empty() {
+        return None;
+    }
+    if serde_json::from_str::<serde_json::Value>(arguments).is_err() {
+        return None;
+    }
+
+    Some(ToolCall {
+        id: tool_call_id_from_response_id(response_id),
+        kind: "function".to_string(),
+        function: ToolFunction { name: name.to_string(), arguments: arguments.to_string() },
+    })
+}
+
+fn build_output_items(
+    response_id: &str,
+    output_text: &str,
+    reasoning: Option<String>,
+    tool_calls: Option<Vec<ToolCall>>,
+) -> Vec<ResponseOutputItem> {
+    let mut output = Vec::new();
+
+    if let Some(reasoning_text) = reasoning
+        && !reasoning_text.trim().is_empty()
+    {
+        output.push(ResponseOutputItem::Reasoning {
+            id: format!("rs_{}", response_id),
+            summary: vec![ResponseReasoningSummary { text: reasoning_text }],
+        });
+    }
+
+    if let Some(calls) = tool_calls {
+        for call in calls {
+            output.push(ResponseOutputItem::FunctionCall {
+                id: format!("fc_{}", call.id),
+                call_id: call.id,
+                name: call.function.name,
+                arguments: call.function.arguments,
+            });
+        }
+    } else {
+        output.push(ResponseOutputItem::Message {
+            id: format!("msg_{}", response_id),
+            role: "assistant".to_string(),
+            content: vec![ResponseOutputText { text: output_text.to_string() }],
+        });
+    }
+
+    output
+}
+
 impl ExecutionEngine {
     #[cfg(feature = "billing")]
     pub fn new(
@@ -318,41 +506,123 @@ impl ExecutionEngine {
         disconnect_at: Option<StageName>,
         sender: Option<mpsc::Sender<Result<ResponseEvent, CoreError>>>,
     ) -> Result<ResponsesResponse, CoreError> {
+        let request_started_at = Instant::now();
         let mut context = ExecutionContext::new(request, self.billing_enabled);
+        info!(
+            event = "core.request.started",
+            request_id = %context.request_id,
+            model = %context.model,
+            billing_enabled = context.billing_enabled,
+            stream = sender.is_some(),
+            input_chars = context.input.len()
+        );
 
         let ingest = IngestHandler;
-        self.run_stage(&ingest, &mut context, disconnect_at.as_ref()).await?;
+        if let Err(error) = self.run_stage(&ingest, &mut context, disconnect_at.as_ref()).await {
+            warn!(
+                event = "core.request.failed",
+                request_id = %context.request_id,
+                model = %context.model,
+                stage = "ingest",
+                duration_ms = request_started_at.elapsed().as_millis() as u64,
+                error = %error
+            );
+            return Err(error);
+        }
 
         let tokenize = TokenizeHandler;
-        self.run_stage(&tokenize, &mut context, disconnect_at.as_ref()).await?;
+        if let Err(error) = self.run_stage(&tokenize, &mut context, disconnect_at.as_ref()).await {
+            warn!(
+                event = "core.request.failed",
+                request_id = %context.request_id,
+                model = %context.model,
+                stage = "tokenize",
+                duration_ms = request_started_at.elapsed().as_millis() as u64,
+                error = %error
+            );
+            return Err(error);
+        }
 
         #[cfg(feature = "billing")]
         if context.billing_enabled {
             let hold = HoldHandler { usage_client: Arc::clone(&self.usage_client) };
-            self.run_stage(&hold, &mut context, disconnect_at.as_ref()).await?;
+            if let Err(error) = self.run_stage(&hold, &mut context, disconnect_at.as_ref()).await {
+                warn!(
+                    event = "core.request.failed",
+                    request_id = %context.request_id,
+                    model = %context.model,
+                    stage = "hold",
+                    duration_ms = request_started_at.elapsed().as_millis() as u64,
+                    error = %error
+                );
+                return Err(error);
+            }
         }
 
         let generate =
             GenerateHandler { provider: Arc::clone(&self.provider), sender: sender.clone() };
-        self.run_stage(&generate, &mut context, disconnect_at.as_ref()).await?;
+        if let Err(error) = self.run_stage(&generate, &mut context, disconnect_at.as_ref()).await {
+            warn!(
+                event = "core.request.failed",
+                request_id = %context.request_id,
+                model = %context.model,
+                stage = "generate",
+                duration_ms = request_started_at.elapsed().as_millis() as u64,
+                error = %error
+            );
+            return Err(error);
+        }
 
         #[cfg(feature = "billing")]
         if context.billing_enabled {
             let finalize = FinalizeHandler { usage_client: Arc::clone(&self.usage_client) };
-            self.run_stage(&finalize, &mut context, disconnect_at.as_ref()).await?;
+            if let Err(error) =
+                self.run_stage(&finalize, &mut context, disconnect_at.as_ref()).await
+            {
+                warn!(
+                    event = "core.request.failed",
+                    request_id = %context.request_id,
+                    model = %context.model,
+                    stage = "finalize",
+                    duration_ms = request_started_at.elapsed().as_millis() as u64,
+                    error = %error
+                );
+                return Err(error);
+            }
         }
 
         if context.state != KernelState::Done {
             context.state = KernelState::Failed;
+            error!(
+                event = "core.request.failed",
+                request_id = %context.request_id,
+                model = %context.model,
+                stage = "terminal",
+                duration_ms = request_started_at.elapsed().as_millis() as u64,
+                error = "terminal state reached without successful settlement"
+            );
             return Err(CoreError::Billing(
                 "terminal state reached without successful settlement".to_string(),
             ));
         }
 
+        let tool_calls =
+            parse_tool_call(&context.output_text, &context.request_id).map(|call| vec![call]);
+        let finish_reason =
+            if tool_calls.is_some() { "tool_calls".to_string() } else { "stop".to_string() };
+        let output = build_output_items(
+            &context.request_id,
+            &context.output_text,
+            context.reasoning.clone(),
+            tool_calls.clone(),
+        );
+
         if let Some(tx) = sender {
             let _ = tx
                 .send(Ok(ResponseEvent::ResponseCompleted {
                     id: context.request_id.clone(),
+                    output: output.clone(),
+                    finish_reason: finish_reason.clone(),
                     usage: Usage {
                         input_tokens: context.input_tokens,
                         output_tokens: context.output_tokens,
@@ -362,16 +632,30 @@ impl ExecutionEngine {
                 .await;
         }
 
-        Ok(ResponsesResponse {
+        let response = ResponsesResponse {
             id: context.request_id,
+            object: "response".to_string(),
             status: "completed".to_string(),
-            output_text: context.output_text,
+            output,
+            finish_reason: finish_reason.clone(),
             usage: Usage {
                 input_tokens: context.input_tokens,
                 output_tokens: context.output_tokens,
                 total_tokens: context.input_tokens + context.output_tokens,
             },
-        })
+        };
+        info!(
+            event = "core.request.completed",
+            request_id = %response.id,
+            status = %response.status,
+            finish_reason = %finish_reason,
+            input_tokens = response.usage.input_tokens,
+            output_tokens = response.usage.output_tokens,
+            total_tokens = response.usage.total_tokens,
+            output_items = response.output.len(),
+            duration_ms = request_started_at.elapsed().as_millis() as u64
+        );
+        Ok(response)
     }
 
     async fn run_stage<H: StageHandler>(
@@ -381,6 +665,7 @@ impl ExecutionEngine {
         disconnect_at: Option<&StageName>,
     ) -> Result<(), CoreError> {
         let stage = handler.stage();
+        let stage_label = format!("{stage:?}");
         let span = info_span!(
             "pipeline_stage",
             request_id = %context.request_id,
@@ -390,19 +675,39 @@ impl ExecutionEngine {
         );
 
         async move {
+            let stage_started_at = Instant::now();
+            info!(event = "pipeline.stage.started");
             if disconnect_at == Some(&stage) {
                 context.client_connected = false;
                 match stage {
                     StageName::Ingest | StageName::Tokenize | StageName::Hold => {
                         context.state = KernelState::Failed;
                         context.hold_acquired = false;
+                        warn!(
+                            event = "pipeline.stage.disconnected",
+                            duration_ms = stage_started_at.elapsed().as_millis() as u64
+                        );
                         return Err(CoreError::ClientDisconnected(stage));
                     }
                     StageName::Generate | StageName::Finalize => {}
                 }
             }
 
-            handler.handle(context).await
+            let result = handler.handle(context).await;
+            match &result {
+                Ok(()) => info!(
+                    event = "pipeline.stage.completed",
+                    state = ?context.state,
+                    duration_ms = stage_started_at.elapsed().as_millis() as u64
+                ),
+                Err(error) => warn!(
+                    event = "pipeline.stage.failed",
+                    stage_name = %stage_label,
+                    duration_ms = stage_started_at.elapsed().as_millis() as u64,
+                    error = %error
+                ),
+            }
+            result
         }
         .instrument(span)
         .await
@@ -509,7 +814,7 @@ mod tests {
             match self.behavior {
                 ProviderBehavior::Success => {
                     let chunks = vec!["hello ".to_string(), input.to_string()];
-                    Ok(ProviderOutcome { output_tokens: 2, chunks })
+                    Ok(ProviderOutcome { output_tokens: 2, chunks, reasoning: None })
                 }
                 ProviderBehavior::Fail => Err(CoreError::Provider("provider failed".to_string())),
             }
@@ -552,10 +857,23 @@ mod tests {
 
     fn render_result(result: Result<ResponsesResponse, CoreError>) -> String {
         match result {
-            Ok(response) => format!(
-                "kind=ok\nstatus={}\noutput={}\nusage_total={}",
-                response.status, response.output_text, response.usage.total_tokens
-            ),
+            Ok(response) => {
+                let output_text = response
+                    .output
+                    .iter()
+                    .find_map(|item| {
+                        if let ResponseOutputItem::Message { content, .. } = item {
+                            content.first().map(|part| part.text.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or("");
+                format!(
+                    "kind=ok\nstatus={}\noutput={}\nusage_total={}",
+                    response.status, output_text, response.usage.total_tokens
+                )
+            }
             Err(error) => format!("kind=err\nerror_kind={}\nerror={}", error_kind(&error), error),
         }
     }

@@ -1,35 +1,32 @@
-use std::{collections::HashMap, convert::Infallible, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    convert::Infallible,
+    sync::Arc,
+    time::Instant,
+};
 
 use axum::{
-    extract::State,
-    response::{sse::Event, IntoResponse, Response, Sse},
-    routing::{get, post},
     Json, Router,
+    extract::State,
+    response::{IntoResponse, Response, Sse, sse::Event},
+    routing::{get, post},
 };
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use tracing::instrument;
+use serde_json::{Value, json};
+use tracing::{debug, error, info, warn};
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 use xrouter_clients_openai::OpenAiCompatibleClient;
 #[cfg(feature = "billing")]
 use xrouter_clients_usage::InMemoryUsageClient;
 use xrouter_contracts::{
-    ChatCompletionsRequest, ChatCompletionsResponse, ResponseEvent, ResponsesRequest,
-    ResponsesResponse,
+    ChatCompletionsRequest, ChatCompletionsResponse, ResponseEvent, ResponseOutputItem,
+    ResponsesRequest, ResponsesResponse,
 };
-use xrouter_core::{CoreError, ExecutionEngine};
+use xrouter_core::{CoreError, ExecutionEngine, ModelDescriptor, default_model_catalog};
 
 pub mod config;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ModelCatalogEntry {
-    id: String,
-    provider: String,
-    context_length: u32,
-    max_completion_tokens: u32,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 struct HealthResponse {
@@ -93,7 +90,6 @@ struct ErrorResponse {
 #[openapi(
     paths(
         get_health,
-        get_compatible_models,
         get_xrouter_models,
         post_responses,
         post_chat_completions
@@ -102,8 +98,6 @@ struct ErrorResponse {
         schemas(
             HealthResponse,
             ErrorResponse,
-            CompatibleModelEntry,
-            CompatibleModelsResponse,
             ModelArchitecture,
             ModelTopProvider,
             ModelPerRequestLimits,
@@ -119,18 +113,57 @@ struct ErrorResponse {
         (name = "xrouter-app", description = "xrouter application API")
     )
 )]
-struct ApiDoc;
+struct XrouterApiDoc;
+
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        get_health,
+        get_compatible_models,
+        post_responses_openai_doc,
+        post_chat_completions_openai_doc
+    ),
+    components(
+        schemas(
+            HealthResponse,
+            ErrorResponse,
+            CompatibleModelEntry,
+            CompatibleModelsResponse,
+            ResponsesRequest,
+            ResponsesResponse,
+            ChatCompletionsRequest,
+            ChatCompletionsResponse
+        )
+    ),
+    tags(
+        (name = "xrouter-app", description = "xrouter application API")
+    )
+)]
+struct OpenAiApiDoc;
 
 #[derive(Clone)]
 pub struct AppState {
     openai_compatible_api: bool,
     default_provider: String,
-    models: Vec<ModelCatalogEntry>,
+    models: Vec<ModelDescriptor>,
     engines: HashMap<String, Arc<ExecutionEngine>>,
 }
 
 impl AppState {
     pub fn from_config(config: &config::AppConfig) -> Self {
+        let enabled_providers = config
+            .providers
+            .iter()
+            .filter_map(|(name, provider_config)| provider_config.enabled.then_some(name.clone()))
+            .collect::<HashSet<_>>();
+        info!(
+            event = "app.config.loaded",
+            openai_compatible_api = config.openai_compatible_api,
+            provider_total = config.providers.len(),
+            provider_enabled = enabled_providers.len()
+        );
+        debug!(event = "app.config.providers", enabled_providers = ?enabled_providers);
+
         let mut engines = HashMap::new();
         for (provider, provider_config) in &config.providers {
             if !provider_config.enabled {
@@ -138,67 +171,43 @@ impl AppState {
             }
             let client = Arc::new(OpenAiCompatibleClient::new(provider.to_string()));
             #[cfg(feature = "billing")]
-            let engine =
-                Arc::new(ExecutionEngine::new(client, Arc::new(InMemoryUsageClient::default()), false));
+            let engine = Arc::new(ExecutionEngine::new(
+                client,
+                Arc::new(InMemoryUsageClient::default()),
+                false,
+            ));
             #[cfg(not(feature = "billing"))]
             let engine = Arc::new(ExecutionEngine::new(client, false));
             engines.insert(provider.to_string(), engine);
         }
+        info!(event = "app.engines.initialized", engine_count = engines.len());
+        debug!(
+            event = "app.engines.providers",
+            providers = ?engines.keys().collect::<Vec<_>>()
+        );
 
-        let models = vec![
-            ModelCatalogEntry {
-                id: "gpt-4.1-mini".to_string(),
-                provider: "openrouter".to_string(),
-                context_length: 128_000,
-                max_completion_tokens: 16_384,
-            },
-            ModelCatalogEntry {
-                id: "openrouter/anthropic/claude-3.5-sonnet".to_string(),
-                provider: "openrouter".to_string(),
-                context_length: 200_000,
-                max_completion_tokens: 8_192,
-            },
-            ModelCatalogEntry {
-                id: "deepseek/deepseek-chat".to_string(),
-                provider: "deepseek".to_string(),
-                context_length: 64_000,
-                max_completion_tokens: 8_192,
-            },
-            ModelCatalogEntry {
-                id: "gigachat/GigaChat-2-Max".to_string(),
-                provider: "gigachat".to_string(),
-                context_length: 32_768,
-                max_completion_tokens: 8_192,
-            },
-            ModelCatalogEntry {
-                id: "yandex/yandexgpt-32k".to_string(),
-                provider: "yandex".to_string(),
-                context_length: 32_768,
-                max_completion_tokens: 8_192,
-            },
-            ModelCatalogEntry {
-                id: "ollama/llama3.1:8b".to_string(),
-                provider: "ollama".to_string(),
-                context_length: 8_192,
-                max_completion_tokens: 4_096,
-            },
-            ModelCatalogEntry {
-                id: "zai/glm-4.5".to_string(),
-                provider: "zai".to_string(),
-                context_length: 128_000,
-                max_completion_tokens: 8_192,
-            },
-            ModelCatalogEntry {
-                id: "xrouter/gpt-4.1-mini".to_string(),
-                provider: "xrouter".to_string(),
-                context_length: 128_000,
-                max_completion_tokens: 16_384,
-            },
-        ];
+        let models = default_model_catalog()
+            .into_iter()
+            .filter(|entry| enabled_providers.contains(&entry.provider))
+            .collect::<Vec<_>>();
+        info!(event = "models.registry.loaded", model_count = models.len());
+        debug!(
+            event = "models.registry.entries",
+            model_ids = ?models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>()
+        );
+
+        let default_provider = if models.iter().any(|entry| entry.provider == "openrouter") {
+            "openrouter".to_string()
+        } else {
+            models
+                .first()
+                .map(|entry| entry.provider.clone())
+                .unwrap_or_else(|| "openrouter".to_string())
+        };
 
         Self {
             openai_compatible_api: config.openai_compatible_api,
-            default_provider: "openrouter".to_string(),
+            default_provider,
             models,
             engines,
         }
@@ -232,22 +241,54 @@ impl AppState {
 
 pub fn build_router(state: AppState) -> Router {
     let openai_compatible_api = state.openai_compatible_api;
-    let router = if openai_compatible_api {
-        Router::new()
-            .route("/health", get(get_health))
-            .route("/v1/models", get(get_compatible_models))
-            .route("/v1/responses", post(post_responses))
-            .route("/v1/chat/completions", post(post_chat_completions))
+    let (router, openapi) = if openai_compatible_api {
+        (
+            Router::new()
+                .route("/health", get(get_health))
+                .route("/v1/models", get(get_compatible_models))
+                .route("/v1/responses", post(post_responses))
+                .route("/v1/chat/completions", post(post_chat_completions)),
+            OpenAiApiDoc::openapi(),
+        )
     } else {
-        Router::new()
-            .route("/health", get(get_health))
-            .route("/api/v1/models", get(get_xrouter_models))
-            .route("/api/v1/responses", post(post_responses))
-            .route("/api/v1/chat/completions", post(post_chat_completions))
+        (
+            Router::new()
+                .route("/health", get(get_health))
+                .route("/api/v1/models", get(get_xrouter_models))
+                .route("/api/v1/responses", post(post_responses))
+                .route("/api/v1/chat/completions", post(post_chat_completions)),
+            XrouterApiDoc::openapi(),
+        )
     };
 
-    router.with_state(state).merge(SwaggerUi::new("/docs").url("/openapi.json", ApiDoc::openapi()))
+    router.with_state(state).merge(SwaggerUi::new("/docs").url("/openapi.json", openapi))
 }
+
+#[allow(dead_code)]
+#[utoipa::path(
+    post,
+    path = "/v1/responses",
+    request_body = ResponsesRequest,
+    responses(
+        (status = 200, description = "Responses API result", body = ResponsesResponse),
+        (status = 400, description = "Validation or provider error", body = ErrorResponse)
+    ),
+    tag = "xrouter-app"
+)]
+fn post_responses_openai_doc() {}
+
+#[allow(dead_code)]
+#[utoipa::path(
+    post,
+    path = "/v1/chat/completions",
+    request_body = ChatCompletionsRequest,
+    responses(
+        (status = 200, description = "Chat Completions API result", body = ChatCompletionsResponse),
+        (status = 400, description = "Validation or provider error", body = ErrorResponse)
+    ),
+    tag = "xrouter-app"
+)]
+fn post_chat_completions_openai_doc() {}
 
 #[utoipa::path(
     get,
@@ -266,6 +307,7 @@ async fn get_health() -> Json<HealthResponse> {
     tag = "xrouter-app"
 )]
 async fn get_compatible_models(State(state): State<AppState>) -> Json<CompatibleModelsResponse> {
+    debug!(event = "http.request.received", route = "/v1/models", openai_compatible_api = true);
     let data = state
         .models
         .iter()
@@ -276,6 +318,12 @@ async fn get_compatible_models(State(state): State<AppState>) -> Json<Compatible
             owned_by: m.provider.clone(),
         })
         .collect::<Vec<_>>();
+    info!(event = "http.models.served", route = "/v1/models", model_count = data.len());
+    debug!(
+        event = "http.models.ids",
+        route = "/v1/models",
+        model_ids = ?data.iter().map(|m| m.id.as_str()).collect::<Vec<_>>()
+    );
     Json(CompatibleModelsResponse { object: "list".to_string(), data })
 }
 
@@ -286,13 +334,18 @@ async fn get_compatible_models(State(state): State<AppState>) -> Json<Compatible
     tag = "xrouter-app"
 )]
 async fn get_xrouter_models(State(state): State<AppState>) -> Json<XrouterModelsResponse> {
+    debug!(
+        event = "http.request.received",
+        route = "/api/v1/models",
+        openai_compatible_api = false
+    );
     let data = state
         .models
         .iter()
         .map(|m| XrouterModelEntry {
             id: m.id.clone(),
             name: m.id.clone(),
-            description: format!("{} model", m.provider),
+            description: m.description.clone(),
             context_length: m.context_length,
             architecture: ModelArchitecture { modality: "text->text".to_string() },
             top_provider: ModelTopProvider {
@@ -306,6 +359,12 @@ async fn get_xrouter_models(State(state): State<AppState>) -> Json<XrouterModels
             },
         })
         .collect::<Vec<_>>();
+    info!(event = "http.models.served", route = "/api/v1/models", model_count = data.len());
+    debug!(
+        event = "http.models.ids",
+        route = "/api/v1/models",
+        model_ids = ?data.iter().map(|m| m.id.as_str()).collect::<Vec<_>>()
+    );
     Json(XrouterModelsResponse { data })
 }
 
@@ -319,18 +378,54 @@ async fn get_xrouter_models(State(state): State<AppState>) -> Json<XrouterModels
     ),
     tag = "xrouter-app"
 )]
-#[instrument(skip(state, request), fields(model = %request.model, stream = request.stream))]
 async fn post_responses(
     State(state): State<AppState>,
     Json(request): Json<ResponsesRequest>,
 ) -> Response {
+    let started_at = Instant::now();
+    let request_model = request.model.clone();
+    let provider = state.resolve_provider_key(&request.model);
+    info!(
+        event = "http.request.received",
+        route = "/api/v1/responses",
+        model = %request.model,
+        provider = %provider,
+        stream = request.stream,
+        input_chars = request.input.len()
+    );
+    debug!(
+        event = "http.request.payload",
+        route = "/api/v1/responses",
+        model = %request_model,
+        provider = %provider,
+        request_text = %request.input
+    );
+
     let engine = match state.resolve_engine(&request.model) {
         Ok(engine) => engine,
-        Err(err) => return error_response(err),
+        Err(err) => {
+            warn!(
+                event = "http.request.failed",
+                route = "/api/v1/responses",
+                model = %request.model,
+                provider = %provider,
+                stream = request.stream,
+                duration_ms = started_at.elapsed().as_millis() as u64,
+                error = %err
+            );
+            return error_response(err);
+        }
     };
 
     if request.stream {
-        let response_id = format!("resp_{}", uuid::Uuid::new_v4().simple());
+        let response_id = new_prefixed_id("resp_");
+        info!(
+            event = "http.stream.started",
+            route = "/api/v1/responses",
+            response_id = %response_id,
+            model = %request.model,
+            provider = %provider
+        );
         let created = json!({
             "type": "response.created",
             "response": {
@@ -355,13 +450,38 @@ async fn post_responses(
                     .to_string(),
                 ),
             ),
-            Ok(ResponseEvent::ResponseCompleted { usage, .. }) => {
+            Ok(ResponseEvent::ReasoningDelta { delta, .. }) => Ok::<Event, Infallible>(
+                Event::default().event("response.reasoning.delta").data(
+                    json!({
+                        "type": "response.reasoning.delta",
+                        "delta": delta
+                    })
+                    .to_string(),
+                ),
+            ),
+            Ok(ResponseEvent::ResponseCompleted { output, finish_reason, usage, .. }) => {
+                let reasoning = extract_reasoning_from_output(&output);
+                info!(
+                    event = "http.stream.completed",
+                    route = "/api/v1/responses",
+                    response_id = %response_id,
+                    provider = %provider,
+                    finish_reason = %finish_reason,
+                    reasoning_present = reasoning.is_some(),
+                    reasoning_chars = reasoning.as_ref().map(|it| it.len()).unwrap_or(0),
+                    input_tokens = usage.input_tokens,
+                    output_tokens = usage.output_tokens,
+                    total_tokens = usage.total_tokens,
+                    duration_ms = started_at.elapsed().as_millis() as u64
+                );
                 Ok(Event::default().event("response.completed").data(
                     json!({
                         "type": "response.completed",
                         "response": {
                             "id": response_id,
                             "status": "completed",
+                            "output": output,
+                            "finish_reason": finish_reason,
                             "usage": {
                                 "input_tokens": usage.input_tokens,
                                 "output_tokens": usage.output_tokens,
@@ -372,12 +492,32 @@ async fn post_responses(
                     .to_string(),
                 ))
             }
-            Ok(ResponseEvent::ResponseError { message, .. }) => Ok(Event::default()
-                .event("response.error")
-                .data(json!({"type": "response.error", "error": message}).to_string())),
-            Err(error) => Ok(Event::default()
-                .event("response.error")
-                .data(json!({"type": "response.error", "error": error.to_string()}).to_string())),
+            Ok(ResponseEvent::ResponseError { message, .. }) => {
+                warn!(
+                    event = "http.stream.failed",
+                    route = "/api/v1/responses",
+                    response_id = %response_id,
+                    provider = %provider,
+                    duration_ms = started_at.elapsed().as_millis() as u64,
+                    error = %message
+                );
+                Ok(Event::default()
+                    .event("response.error")
+                    .data(json!({"type": "response.error", "error": message}).to_string()))
+            }
+            Err(error) => {
+                warn!(
+                    event = "http.stream.failed",
+                    route = "/api/v1/responses",
+                    response_id = %response_id,
+                    provider = %provider,
+                    duration_ms = started_at.elapsed().as_millis() as u64,
+                    error = %error
+                );
+                Ok(Event::default().event("response.error").data(
+                    json!({"type": "response.error", "error": error.to_string()}).to_string(),
+                ))
+            }
         });
 
         let bootstrap = futures::stream::iter(vec![Ok::<Event, Infallible>(
@@ -388,8 +528,44 @@ async fn post_responses(
     }
 
     match run_responses_request(engine, request).await {
-        Ok(resp) => Json(resp).into_response(),
-        Err(err) => error_response(err),
+        Ok(mut resp) => {
+            resp.id = ensure_id_prefix(&resp.id, "resp_");
+            let response_text = extract_message_text_from_output(&resp.output);
+            let reasoning = extract_reasoning_from_output(&resp.output);
+            debug!(
+                event = "http.response.payload",
+                route = "/api/v1/responses",
+                model = %request_model,
+                provider = %provider,
+                response_text = %response_text
+            );
+            info!(
+                event = "http.request.succeeded",
+                route = "/api/v1/responses",
+                model = %request_model,
+                provider = %provider,
+                status = %resp.status,
+                finish_reason = %resp.finish_reason,
+                reasoning_present = reasoning.is_some(),
+                reasoning_chars = reasoning.as_ref().map(|it| it.len()).unwrap_or(0),
+                input_tokens = resp.usage.input_tokens,
+                output_tokens = resp.usage.output_tokens,
+                total_tokens = resp.usage.total_tokens,
+                duration_ms = started_at.elapsed().as_millis() as u64
+            );
+            Json(resp).into_response()
+        }
+        Err(err) => {
+            warn!(
+                event = "http.request.failed",
+                route = "/api/v1/responses",
+                model = %request_model,
+                provider = %provider,
+                duration_ms = started_at.elapsed().as_millis() as u64,
+                error = %err
+            );
+            error_response(err)
+        }
     }
 }
 
@@ -403,41 +579,147 @@ async fn post_responses(
     ),
     tag = "xrouter-app"
 )]
-#[instrument(skip(state, request), fields(model = %request.model, stream = request.stream))]
 async fn post_chat_completions(
     State(state): State<AppState>,
     Json(request): Json<ChatCompletionsRequest>,
 ) -> Response {
+    let started_at = Instant::now();
+    let request_payload = request
+        .messages
+        .iter()
+        .map(|message| format!("{}:{}", message.role, message.content))
+        .collect::<Vec<_>>()
+        .join("\n");
     let core_request = request.clone().into_responses_request();
+    let request_model = core_request.model.clone();
+    let provider = state.resolve_provider_key(&core_request.model);
+    info!(
+        event = "http.request.received",
+        route = "/api/v1/chat/completions",
+        model = %core_request.model,
+        provider = %provider,
+        stream = request.stream,
+        message_count = request.messages.len()
+    );
+    debug!(
+        event = "http.request.payload",
+        route = "/api/v1/chat/completions",
+        model = %request_model,
+        provider = %provider,
+        request_text = %request_payload
+    );
     let engine = match state.resolve_engine(&core_request.model) {
         Ok(engine) => engine,
-        Err(err) => return error_response(err),
+        Err(err) => {
+            warn!(
+                event = "http.request.failed",
+                route = "/api/v1/chat/completions",
+                model = %core_request.model,
+                provider = %provider,
+                duration_ms = started_at.elapsed().as_millis() as u64,
+                error = %err
+            );
+            return error_response(err);
+        }
     };
 
     if request.stream {
-        let stream = engine.execute_stream(core_request, None).map(|evt| match evt {
-            Ok(ResponseEvent::OutputTextDelta { id, delta }) => Ok::<Event, Infallible>(
+        let chat_completion_id = new_prefixed_id("chatcmpl_");
+        info!(
+            event = "http.stream.started",
+            route = "/api/v1/chat/completions",
+            model = %core_request.model,
+            provider = %provider
+        );
+        let stream_provider = provider.clone();
+        let stream_started_at = started_at;
+        let stream = engine.execute_stream(core_request, None).map(move |evt| match evt {
+            Ok(ResponseEvent::OutputTextDelta { delta, .. }) => Ok::<Event, Infallible>(
                 Event::default().data(
                     json!({
-                        "id": id,
+                        "id": chat_completion_id.clone(),
                         "object": "chat.completion.chunk",
                         "choices": [{"delta": {"content": delta}, "index": 0, "finish_reason": Value::Null}]
                     })
                     .to_string(),
                 ),
             ),
-            Ok(ResponseEvent::ResponseCompleted { id, .. }) => Ok(Event::default().data(
-                json!({
-                    "id": id,
-                    "object": "chat.completion.chunk",
-                    "choices": [{"delta": {}, "index": 0, "finish_reason": "stop"}]
-                })
-                .to_string(),
-            )),
-            Ok(ResponseEvent::ResponseError { id, message }) => {
-                Ok(Event::default().data(json!({"id": id, "error": message}).to_string()))
+            Ok(ResponseEvent::ReasoningDelta { delta, .. }) => Ok::<Event, Infallible>(
+                Event::default().data(
+                    json!({
+                        "id": chat_completion_id.clone(),
+                        "object": "chat.completion.chunk",
+                        "choices": [{
+                            "delta": {"reasoning_content": delta},
+                            "index": 0,
+                            "finish_reason": Value::Null
+                        }]
+                    })
+                    .to_string(),
+                ),
+            ),
+            Ok(ResponseEvent::ResponseCompleted {
+                id,
+                output,
+                finish_reason,
+                ..
+            }) => {
+                let reasoning = extract_reasoning_from_output(&output);
+                let tool_calls = extract_tool_calls_from_output(&output);
+                info!(
+                    event = "http.stream.completed",
+                    route = "/api/v1/chat/completions",
+                    response_id = %id,
+                    provider = %stream_provider,
+                    finish_reason = %finish_reason,
+                    reasoning_present = reasoning.is_some(),
+                    reasoning_chars = reasoning.as_ref().map(|it| it.len()).unwrap_or(0),
+                    duration_ms = stream_started_at.elapsed().as_millis() as u64
+                );
+                let chunk = if let Some(tool_call) =
+                    tool_calls.as_ref().and_then(|calls| calls.first())
+                {
+                    json!({
+                        "id": chat_completion_id.clone(),
+                        "object": "chat.completion.chunk",
+                        "choices": [{
+                            "delta": {"tool_calls": [{"index": 0, "id": tool_call.id, "type": tool_call.kind, "function": tool_call.function}]},
+                            "index": 0,
+                            "finish_reason": "tool_calls"
+                        }]
+                    })
+                } else {
+                    json!({
+                        "id": chat_completion_id.clone(),
+                        "object": "chat.completion.chunk",
+                        "choices": [{"delta": {}, "index": 0, "finish_reason": "stop"}]
+                    })
+                };
+                Ok(Event::default().data(chunk.to_string()))
             }
-            Err(error) => Ok(Event::default().data(json!({"error": error.to_string()}).to_string())),
+            Ok(ResponseEvent::ResponseError { id, message }) => {
+                warn!(
+                    event = "http.stream.failed",
+                    route = "/api/v1/chat/completions",
+                    response_id = %id,
+                    provider = %stream_provider,
+                    duration_ms = stream_started_at.elapsed().as_millis() as u64,
+                    error = %message
+                );
+                Ok(Event::default()
+                    .data(json!({"id": chat_completion_id.clone(), "error": message}).to_string()))
+            }
+            Err(error) => {
+                warn!(
+                    event = "http.stream.failed",
+                    route = "/api/v1/chat/completions",
+                    provider = %stream_provider,
+                    duration_ms = stream_started_at.elapsed().as_millis() as u64,
+                    error = %error
+                );
+                Ok(Event::default()
+                    .data(json!({"id": chat_completion_id.clone(), "error": error.to_string()}).to_string()))
+            }
         });
 
         let done =
@@ -446,8 +728,46 @@ async fn post_chat_completions(
     }
 
     match run_responses_request(engine, core_request).await {
-        Ok(resp) => Json(ChatCompletionsResponse::from_responses(resp)).into_response(),
-        Err(err) => error_response(err),
+        Ok(mut resp) => {
+            resp.id = ensure_id_prefix(&resp.id, "resp_");
+            let response_text = extract_message_text_from_output(&resp.output);
+            let reasoning = extract_reasoning_from_output(&resp.output);
+            debug!(
+                event = "http.response.payload",
+                route = "/api/v1/chat/completions",
+                model = %request_model,
+                provider = %provider,
+                response_text = %response_text
+            );
+            info!(
+                event = "http.request.succeeded",
+                route = "/api/v1/chat/completions",
+                model = %request_model,
+                provider = %provider,
+                status = %resp.status,
+                finish_reason = %resp.finish_reason,
+                reasoning_present = reasoning.is_some(),
+                reasoning_chars = reasoning.as_ref().map(|it| it.len()).unwrap_or(0),
+                input_tokens = resp.usage.input_tokens,
+                output_tokens = resp.usage.output_tokens,
+                total_tokens = resp.usage.total_tokens,
+                duration_ms = started_at.elapsed().as_millis() as u64
+            );
+            let mut chat = ChatCompletionsResponse::from_responses(resp);
+            chat.id = ensure_id_prefix(&chat.id, "chatcmpl_");
+            Json(chat).into_response()
+        }
+        Err(err) => {
+            warn!(
+                event = "http.request.failed",
+                route = "/api/v1/chat/completions",
+                model = %request_model,
+                provider = %provider,
+                duration_ms = started_at.elapsed().as_millis() as u64,
+                error = %err
+            );
+            error_response(err)
+        }
     }
 }
 
@@ -459,16 +779,74 @@ async fn run_responses_request(
 }
 
 fn error_response(err: CoreError) -> Response {
+    match &err {
+        CoreError::Validation(_) | CoreError::Provider(_) => {
+            warn!(event = "http.error_response", error = %err);
+        }
+        CoreError::Billing(_) | CoreError::ClientDisconnected(_) => {
+            error!(event = "http.error_response", error = %err);
+        }
+    }
     (axum::http::StatusCode::BAD_REQUEST, Json(ErrorResponse { error: err.to_string() }))
         .into_response()
+}
+
+fn ensure_id_prefix(id: &str, prefix: &str) -> String {
+    if id.starts_with(prefix) { id.to_string() } else { format!("{prefix}{id}") }
+}
+
+fn new_prefixed_id(prefix: &str) -> String {
+    format!("{prefix}{}", uuid::Uuid::new_v4().simple())
+}
+
+fn extract_message_text_from_output(output: &[ResponseOutputItem]) -> String {
+    output
+        .iter()
+        .find_map(|item| {
+            if let ResponseOutputItem::Message { content, .. } = item {
+                content.first().map(|part| part.text.clone())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default()
+}
+
+fn extract_reasoning_from_output(output: &[ResponseOutputItem]) -> Option<String> {
+    output.iter().find_map(|item| {
+        if let ResponseOutputItem::Reasoning { summary, .. } = item {
+            summary.first().map(|s| s.text.clone())
+        } else {
+            None
+        }
+    })
+}
+
+fn extract_tool_calls_from_output(
+    output: &[ResponseOutputItem],
+) -> Option<Vec<xrouter_contracts::ToolCall>> {
+    let mut calls = Vec::new();
+    for item in output {
+        if let ResponseOutputItem::FunctionCall { call_id, name, arguments, .. } = item {
+            calls.push(xrouter_contracts::ToolCall {
+                id: call_id.clone(),
+                kind: "function".to_string(),
+                function: xrouter_contracts::ToolFunction {
+                    name: name.clone(),
+                    arguments: arguments.clone(),
+                },
+            });
+        }
+    }
+    if calls.is_empty() { None } else { Some(calls) }
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use axum::body::to_bytes;
     use axum::body::Body;
+    use axum::body::to_bytes;
     use axum::http::{Request, StatusCode};
     use serde_json::Map;
     use tower::ServiceExt;
@@ -571,7 +949,20 @@ mod tests {
             return format!("json.data_len={}\njson.first_id={first_id}", data.len());
         }
 
-        if let Some(output_text) = obj.get("output_text").and_then(Value::as_str) {
+        if let Some(output) = obj.get("output").and_then(Value::as_array) {
+            let output_text = output
+                .iter()
+                .find_map(|item| {
+                    item.as_object()
+                        .filter(|map| map.get("type").and_then(Value::as_str) == Some("message"))
+                        .and_then(|map| map.get("content"))
+                        .and_then(Value::as_array)
+                        .and_then(|arr| arr.first())
+                        .and_then(Value::as_object)
+                        .and_then(|part| part.get("text"))
+                        .and_then(Value::as_str)
+                })
+                .unwrap_or("");
             let status = obj.get("status").and_then(Value::as_str).unwrap_or("<none>");
             let usage_total = obj
                 .get("usage")
@@ -698,7 +1089,7 @@ path=/api/v1/models
                 r#"
 status=200
 json.data_len=9
-json.first_id=gpt-4.1-mini
+json.first_id=<id>
 "#,
             ),
             (
@@ -762,7 +1153,7 @@ path=/v1/models
 "#,
                 r#"
 status=404
-text.body=Not Found
+text.body=
 "#,
             ),
         ];
@@ -784,7 +1175,7 @@ path=/v1/models
                 r#"
 status=200
 json.data_len=9
-json.first_id=gpt-4.1-mini
+json.first_id=<id>
 "#,
             ),
             (
@@ -795,7 +1186,7 @@ path=/api/v1/models
 "#,
                 r#"
 status=404
-text.body=Not Found
+text.body=
 "#,
             ),
         ];
@@ -803,5 +1194,286 @@ text.body=Not Found
         for (fixture, expected) in fixtures {
             check_fixture(fixture, expected, true).await;
         }
+    }
+
+    #[tokio::test]
+    async fn app_models_empty_when_all_providers_disabled() {
+        let mut config = crate::config::AppConfig::for_tests();
+        for provider in config.providers.values_mut() {
+            provider.enabled = false;
+        }
+
+        let app = build_router(AppState::from_config(&config));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/models")
+                    .body(Body::empty())
+                    .expect("request must build"),
+            )
+            .await
+            .expect("request must complete");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let snapshot = snapshot_response(response).await;
+        assert_snapshot(
+            "models_empty_when_all_providers_disabled",
+            &snapshot,
+            r#"
+status=200
+json.data_len=0
+json.first_id=<none>
+"#,
+        );
+    }
+
+    #[tokio::test]
+    async fn responses_non_stream_uses_resp_id_prefix() {
+        let app = build_router(test_app_state(false));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/responses")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"model":"deepseek/deepseek-chat","input":"hello","stream":false}"#,
+                    ))
+                    .expect("request must build"),
+            )
+            .await
+            .expect("request must complete");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body read must succeed");
+        let payload: Value =
+            serde_json::from_slice(&body).expect("response body must be valid json");
+        let id = payload.get("id").and_then(Value::as_str).expect("id must be present");
+        assert!(id.starts_with("resp_"), "unexpected id: {id}");
+    }
+
+    #[tokio::test]
+    async fn chat_non_stream_uses_chatcmpl_id_prefix() {
+        let app = build_router(test_app_state(false));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"model":"deepseek/deepseek-chat","messages":[{"role":"user","content":"hello"}],"stream":false}"#,
+                    ))
+                    .expect("request must build"),
+            )
+            .await
+            .expect("request must complete");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body read must succeed");
+        let payload: Value =
+            serde_json::from_slice(&body).expect("response body must be valid json");
+        let id = payload.get("id").and_then(Value::as_str).expect("id must be present");
+        assert!(id.starts_with("chatcmpl_"), "unexpected id: {id}");
+    }
+
+    #[tokio::test]
+    async fn chat_stream_emits_chatcmpl_id_and_done_marker() {
+        let app = build_router(test_app_state(false));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"model":"deepseek/deepseek-chat","messages":[{"role":"user","content":"hello world"}],"stream":true}"#,
+                    ))
+                    .expect("request must build"),
+            )
+            .await
+            .expect("request must complete");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body read must succeed");
+        let payload = String::from_utf8_lossy(&body);
+        assert!(payload.contains("\"id\":\"chatcmpl_"), "expected chatcmpl id in stream payload");
+        assert!(payload.contains("[DONE]"), "expected done marker in stream payload");
+    }
+
+    #[tokio::test]
+    async fn responses_tool_call_sets_finish_reason_and_tool_call_id() {
+        let app = build_router(test_app_state(false));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/responses")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"model":"deepseek/deepseek-chat","input":"TOOL_CALL:get_weather:{\"location\":\"New York\"}","stream":false}"#,
+                    ))
+                    .expect("request must build"),
+            )
+            .await
+            .expect("request must complete");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body read must succeed");
+        let payload: Value =
+            serde_json::from_slice(&body).expect("response body must be valid json");
+        assert_eq!(payload.get("finish_reason").and_then(Value::as_str), Some("tool_calls"));
+        let tool_call_id = payload
+            .get("output")
+            .and_then(Value::as_array)
+            .and_then(|arr| {
+                arr.iter().find(|item| {
+                    item.as_object().and_then(|obj| obj.get("type")).and_then(Value::as_str)
+                        == Some("function_call")
+                })
+            })
+            .and_then(Value::as_object)
+            .and_then(|obj| obj.get("call_id"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        assert!(tool_call_id.starts_with("call_"), "unexpected tool_call id: {tool_call_id}");
+    }
+
+    #[tokio::test]
+    async fn chat_non_stream_maps_tool_call_to_choice_message() {
+        let app = build_router(test_app_state(false));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"model":"deepseek/deepseek-chat","messages":[{"role":"user","content":"TOOL_CALL:get_weather:{\"location\":\"New York\"}"}],"stream":false}"#,
+                    ))
+                    .expect("request must build"),
+            )
+            .await
+            .expect("request must complete");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body read must succeed");
+        let payload: Value =
+            serde_json::from_slice(&body).expect("response body must be valid json");
+        assert_eq!(
+            payload
+                .get("choices")
+                .and_then(Value::as_array)
+                .and_then(|arr| arr.first())
+                .and_then(Value::as_object)
+                .and_then(|choice| choice.get("finish_reason"))
+                .and_then(Value::as_str),
+            Some("tool_calls")
+        );
+        let tool_call_id = payload
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|arr| arr.first())
+            .and_then(Value::as_object)
+            .and_then(|choice| choice.get("message"))
+            .and_then(Value::as_object)
+            .and_then(|message| message.get("tool_calls"))
+            .and_then(Value::as_array)
+            .and_then(|arr| arr.first())
+            .and_then(Value::as_object)
+            .and_then(|obj| obj.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        assert!(tool_call_id.starts_with("call_"), "unexpected tool_call id: {tool_call_id}");
+    }
+
+    #[tokio::test]
+    async fn responses_reasoner_model_returns_reasoning_field() {
+        let app = build_router(test_app_state(false));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/responses")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"model":"deepseek/deepseek-reasoner","input":"Solve 2+2 briefly","stream":false}"#,
+                    ))
+                    .expect("request must build"),
+            )
+            .await
+            .expect("request must complete");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body read must succeed");
+        let payload: Value =
+            serde_json::from_slice(&body).expect("response body must be valid json");
+        let reasoning = payload
+            .get("output")
+            .and_then(Value::as_array)
+            .and_then(|arr| {
+                arr.iter().find(|item| {
+                    item.as_object().and_then(|obj| obj.get("type")).and_then(Value::as_str)
+                        == Some("reasoning")
+                })
+            })
+            .and_then(Value::as_object)
+            .and_then(|obj| obj.get("summary"))
+            .and_then(Value::as_array)
+            .and_then(|arr| arr.first())
+            .and_then(Value::as_object)
+            .and_then(|obj| obj.get("text"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        assert!(!reasoning.is_empty(), "expected reasoning for deepseek-reasoner");
+    }
+
+    #[tokio::test]
+    async fn chat_reasoner_model_maps_reasoning_to_message_field() {
+        let app = build_router(test_app_state(false));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"model":"deepseek/deepseek-reasoner","messages":[{"role":"user","content":"Solve 2+2 briefly"}],"stream":false}"#,
+                    ))
+                    .expect("request must build"),
+            )
+            .await
+            .expect("request must complete");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body read must succeed");
+        let payload: Value =
+            serde_json::from_slice(&body).expect("response body must be valid json");
+        let reasoning = payload
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|arr| arr.first())
+            .and_then(Value::as_object)
+            .and_then(|choice| choice.get("message"))
+            .and_then(Value::as_object)
+            .and_then(|message| message.get("reasoning"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        assert!(!reasoning.is_empty(), "expected reasoning in chat message for reasoner model");
     }
 }

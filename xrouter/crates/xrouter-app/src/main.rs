@@ -1,14 +1,22 @@
 use std::net::SocketAddr;
 
-use xrouter_app::{build_router, config::AppConfig, AppState};
-use xrouter_observability::init_tracing;
+use tracing::info;
+use xrouter_app::{AppState, build_router, config::AppConfig};
+use xrouter_observability::init_observability;
 
 #[tokio::main]
 async fn main() {
     let _ = dotenvy::dotenv();
-    init_tracing("xrouter-app");
+    init_observability("xrouter-app");
 
     let config = AppConfig::from_env().expect("configuration must be valid");
+    info!(
+        event = "app.starting",
+        host = %config.host,
+        port = config.port,
+        billing_enabled = config.billing_enabled,
+        openai_compatible_api = config.openai_compatible_api
+    );
     let state = AppState::from_config(&config);
     let app = build_router(state);
     let addr: SocketAddr =
