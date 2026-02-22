@@ -29,6 +29,7 @@ struct ModelCatalogEntry {
 
 #[derive(Clone)]
 pub struct AppState {
+    openai_compatible_api: bool,
     default_provider: String,
     models: Vec<ModelCatalogEntry>,
     engines: HashMap<String, Arc<ExecutionEngine>>,
@@ -49,7 +50,7 @@ impl AppState {
         let models = vec![
             ModelCatalogEntry {
                 id: "gpt-4.1-mini".to_string(),
-                provider: "openai".to_string(),
+                provider: "openrouter".to_string(),
                 context_length: 128_000,
                 max_completion_tokens: 16_384,
             },
@@ -90,12 +91,6 @@ impl AppState {
                 max_completion_tokens: 8_192,
             },
             ModelCatalogEntry {
-                id: "agents/gpt-4o-mini".to_string(),
-                provider: "agents".to_string(),
-                context_length: 128_000,
-                max_completion_tokens: 16_384,
-            },
-            ModelCatalogEntry {
                 id: "xrouter/gpt-4.1-mini".to_string(),
                 provider: "xrouter".to_string(),
                 context_length: 128_000,
@@ -103,7 +98,12 @@ impl AppState {
             },
         ];
 
-        Self { default_provider: "openai".to_string(), models, engines }
+        Self {
+            openai_compatible_api: config.openai_compatible_api,
+            default_provider: "openrouter".to_string(),
+            models,
+            engines,
+        }
     }
 
     pub fn new(_billing_enabled: bool) -> Self {
@@ -133,21 +133,27 @@ impl AppState {
 }
 
 pub fn build_router(state: AppState) -> Router {
-    Router::new()
-        .route("/health", get(get_health))
-        .route("/v1/models", get(get_openai_models))
-        .route("/api/v1/models", get(get_xrouter_models))
-        .route("/v1/responses", post(post_responses))
-        .route("/v1/chat/completions", post(post_chat_completions))
-        .route("/api/v1/chat/completions", post(post_chat_completions))
-        .with_state(state)
+    let openai_compatible_api = state.openai_compatible_api;
+    let router = Router::new().route("/health", get(get_health)).with_state(state);
+
+    if openai_compatible_api {
+        router
+            .route("/v1/models", get(get_compatible_models))
+            .route("/v1/responses", post(post_responses))
+            .route("/v1/chat/completions", post(post_chat_completions))
+    } else {
+        router
+            .route("/api/v1/models", get(get_xrouter_models))
+            .route("/api/v1/responses", post(post_responses))
+            .route("/api/v1/chat/completions", post(post_chat_completions))
+    }
 }
 
 async fn get_health() -> Json<Value> {
     Json(json!({"status": "healthy"}))
 }
 
-async fn get_openai_models(State(state): State<AppState>) -> Json<Value> {
+async fn get_compatible_models(State(state): State<AppState>) -> Json<Value> {
     let data = state
         .models
         .iter()
@@ -471,6 +477,12 @@ mod tests {
     }
 
     fn summarize_text(body: &str) -> String {
+        if !body.contains("response.created")
+            && !body.contains("response.completed")
+            && !body.contains("[DONE]")
+        {
+            return format!("text.body={}", body.trim());
+        }
         format!(
             "text.has_response_created={}\ntext.has_response_completed={}\ntext.has_done_marker={}",
             body.contains("response.created"),
@@ -492,9 +504,19 @@ mod tests {
         format!("status={status}\n{summary}")
     }
 
-    async fn check_fixture(raw_fixture: &str, expected_snapshot: &str) {
+    fn test_app_state(openai_compatible_api: bool) -> AppState {
+        let mut config = crate::config::AppConfig::for_tests();
+        config.openai_compatible_api = openai_compatible_api;
+        AppState::from_config(&config)
+    }
+
+    async fn check_fixture(
+        raw_fixture: &str,
+        expected_snapshot: &str,
+        openai_compatible_api: bool,
+    ) {
         let fixture = AppFixture::parse(raw_fixture);
-        let app = build_router(AppState::new(false));
+        let app = build_router(test_app_state(openai_compatible_api));
 
         let mut builder = Request::builder().method(fixture.method).uri(fixture.path);
 
@@ -534,18 +556,6 @@ json.status=healthy
             ),
             (
                 r#"
-name=models_openai
-method=GET
-path=/v1/models
-"#,
-                r#"
-status=200
-json.data_len=9
-json.first_id=gpt-4.1-mini
-"#,
-            ),
-            (
-                r#"
 name=models_xrouter
 method=GET
 path=/api/v1/models
@@ -560,7 +570,7 @@ json.first_id=gpt-4.1-mini
                 r#"
 name=responses_success
 method=POST
-path=/v1/responses
+path=/api/v1/responses
 body={"model":"openrouter/anthropic/claude-3.5-sonnet","input":"hello world","stream":false}
 "#,
                 r#"
@@ -574,7 +584,7 @@ json.usage_total=4
                 r#"
 name=responses_validation_error
 method=POST
-path=/v1/responses
+path=/api/v1/responses
 body={"model":"gpt-4.1-mini","input":"","stream":false}
 "#,
                 r#"
@@ -586,7 +596,7 @@ json.error=validation failed: input must not be empty
                 r#"
 name=chat_adapter_success
 method=POST
-path=/v1/chat/completions
+path=/api/v1/chat/completions
 body={"model":"gigachat/GigaChat-2-Max","messages":[{"role":"user","content":"hello world"}],"stream":false}
 "#,
                 r#"
@@ -599,7 +609,7 @@ json.choice0=[gigachat] user:hello world
                 r#"
 name=responses_stream
 method=POST
-path=/v1/responses
+path=/api/v1/responses
 body={"model":"gpt-4.1-mini","input":"hello world","stream":true}
 "#,
                 r#"
@@ -609,10 +619,54 @@ text.has_response_completed=true
 text.has_done_marker=false
 "#,
             ),
+            (
+                r#"
+name=openai_paths_disabled_by_default
+method=GET
+path=/v1/models
+"#,
+                r#"
+status=404
+text.body=Not Found
+"#,
+            ),
         ];
 
         for (fixture, expected) in fixtures {
-            check_fixture(fixture, expected).await;
+            check_fixture(fixture, expected, false).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn app_openai_compatible_paths_fixtures() {
+        let fixtures = [
+            (
+                r#"
+name=openai_compatible_models_path
+method=GET
+path=/v1/models
+"#,
+                r#"
+status=200
+json.data_len=9
+json.first_id=gpt-4.1-mini
+"#,
+            ),
+            (
+                r#"
+name=xrouter_paths_disabled_in_openai_mode
+method=GET
+path=/api/v1/models
+"#,
+                r#"
+status=404
+text.body=Not Found
+"#,
+            ),
+        ];
+
+        for (fixture, expected) in fixtures {
+            check_fixture(fixture, expected, true).await;
         }
     }
 }

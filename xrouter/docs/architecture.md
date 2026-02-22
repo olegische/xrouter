@@ -10,8 +10,11 @@ while keeping lifecycle semantics aligned with `formal/xrouter.tla`.
 
 xrouter is a Responses-first LLM router with compatibility adapters.
 
-- Canonical external contract: OpenAI Responses API.
-- Compatibility contract: Chat Completions as an adapter over Responses flow.
+- Core request/response model is Responses-first.
+- Chat Completions is an adapter over Responses flow.
+- Access-point mode is configurable:
+  - `ENABLE_OPENAI_COMPATIBLE_API=false`: xrouter/openrouter-style paths (`/api/v1/...`),
+  - `ENABLE_OPENAI_COMPATIBLE_API=true`: OpenAI-compatible paths (`/v1/...`).
 - Core execution model: typed stage pipeline.
 - Provider routing: model/provider resolution in orchestration layer, not in routes.
 - Billing stages are optional and feature-gated.
@@ -122,10 +125,11 @@ Boundary intent:
 
 ### Contract invariants
 
-1. Responses API is the source-of-truth external contract.
-2. Chat Completions is an adapter over Responses-first core flow.
-3. Provider-specific contract quirks are isolated at boundaries (adapter/client), not in pipeline policy.
-4. Streaming is first-class in core and exposed as typed events.
+1. Internal orchestration is Responses-first regardless of selected route surface.
+2. OpenAI-compatible API is a route-layer feature toggle, not a provider identity.
+3. Chat Completions is an adapter over Responses-first core flow.
+4. Provider-specific contract quirks are isolated at boundaries (adapter/client), not in pipeline policy.
+5. Streaming is first-class in core and exposed as typed events.
 
 ### Dependency and layering invariants
 

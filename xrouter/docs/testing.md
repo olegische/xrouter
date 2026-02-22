@@ -20,7 +20,7 @@ Current fixture format is line-based:
 ```text
 name=responses_success
 method=POST
-path=/v1/responses
+path=/api/v1/responses
 body={"model":"gpt-4.1-mini","input":"hello world","stream":false}
 ```
 
@@ -65,10 +65,13 @@ This keeps snapshots stable and readable while still verifying external behavior
 - Core billing commit and recovery-required outcomes (`billing` feature).
 - App routes:
   - `GET /health`
-  - `GET /v1/models`
-  - `GET /api/v1/models`
-  - `POST /v1/responses` (non-stream + stream)
-  - `POST /v1/chat/completions`
+  - `GET /api/v1/models` in default mode
+  - `POST /api/v1/responses` (non-stream + stream)
+  - `POST /api/v1/chat/completions`
+  - `/v1/*` path family returns `404` in default (non-OpenAI-compatible) mode.
+  - In `ENABLE_OPENAI_COMPATIBLE_API=true` mode:
+    - `GET /v1/models` works,
+    - `/api/v1/*` paths return `404`.
 
 ## Next additions
 

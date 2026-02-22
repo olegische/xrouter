@@ -11,10 +11,13 @@ No required variables for local stub mode.
 - `XR_HOST` (default: `127.0.0.1`)
 - `XR_PORT` (default: `3000`)
 - `XR_BILLING_ENABLED` (default: `false`)
+- `ENABLE_OPENAI_COMPATIBLE_API` (default: `false`)
+  - `false`: xrouter/openrouter-style access points (`/api/v1/...`)
+  - `true`: OpenAI-compatible access points (`/v1/...`)
 
 ## Provider settings
 
-For each provider prefix (`OPENAI`, `OPENROUTER`, `DEEPSEEK`, `GIGACHAT`, `YANDEX`, `OLLAMA`, `ZAI`, `AGENTS`, `XROUTER`):
+For each provider prefix (`OPENROUTER`, `DEEPSEEK`, `GIGACHAT`, `YANDEX`, `OLLAMA`, `ZAI`, `XROUTER`):
 
 - `<PREFIX>_ENABLED` (`true`/`false`, default: `true`)
 - `<PREFIX>_API_KEY`
@@ -22,8 +25,8 @@ For each provider prefix (`OPENAI`, `OPENROUTER`, `DEEPSEEK`, `GIGACHAT`, `YANDE
 
 Example:
 
-- `OPENAI_API_KEY`
-- `OPENAI_BASE_URL`
+- `OPENROUTER_API_KEY`
+- `OPENROUTER_BASE_URL`
 
 ## Local run
 
@@ -38,5 +41,5 @@ just run
 or inline:
 
 ```bash
-OPENAI_API_KEY=sk-... XR_PORT=3000 cargo run -p xrouter-app
+OPENROUTER_API_KEY=... XR_PORT=3000 cargo run -p xrouter-app
 ```

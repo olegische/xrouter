@@ -13,6 +13,7 @@ pub struct AppConfig {
     pub host: String,
     pub port: u16,
     pub billing_enabled: bool,
+    pub openai_compatible_api: bool,
     pub providers: HashMap<String, ProviderConfig>,
 }
 
@@ -22,6 +23,8 @@ pub enum ConfigError {
     InvalidPort(String),
     #[error("invalid XR_BILLING_ENABLED value: {0}")]
     InvalidBool(String),
+    #[error("invalid ENABLE_OPENAI_COMPATIBLE_API value: {0}")]
+    InvalidOpenAiCompatibleApiBool(String),
 }
 
 impl AppConfig {
@@ -36,21 +39,25 @@ impl AppConfig {
         let billing_enabled = parse_bool(&billing_raw)
             .ok_or_else(|| ConfigError::InvalidBool(billing_raw.clone()))?;
 
+        let openai_compatible_raw =
+            env::var("ENABLE_OPENAI_COMPATIBLE_API").unwrap_or_else(|_| "false".to_string());
+        let openai_compatible_api = parse_bool(&openai_compatible_raw).ok_or_else(|| {
+            ConfigError::InvalidOpenAiCompatibleApiBool(openai_compatible_raw.clone())
+        })?;
+
         let providers = [
-            provider_from_env("openai", "OPENAI"),
             provider_from_env("openrouter", "OPENROUTER"),
             provider_from_env("deepseek", "DEEPSEEK"),
             provider_from_env("gigachat", "GIGACHAT"),
             provider_from_env("yandex", "YANDEX"),
             provider_from_env("ollama", "OLLAMA"),
             provider_from_env("zai", "ZAI"),
-            provider_from_env("agents", "AGENTS"),
             provider_from_env("xrouter", "XROUTER"),
         ]
         .into_iter()
         .collect::<HashMap<_, _>>();
 
-        Ok(Self { host, port, billing_enabled, providers })
+        Ok(Self { host, port, billing_enabled, openai_compatible_api, providers })
     }
 
     pub fn for_tests() -> Self {
@@ -58,11 +65,8 @@ impl AppConfig {
             host: "127.0.0.1".to_string(),
             port: 3000,
             billing_enabled: false,
+            openai_compatible_api: false,
             providers: [
-                (
-                    "openai".to_string(),
-                    ProviderConfig { enabled: true, api_key: None, base_url: None },
-                ),
                 (
                     "openrouter".to_string(),
                     ProviderConfig { enabled: true, api_key: None, base_url: None },
@@ -85,10 +89,6 @@ impl AppConfig {
                 ),
                 (
                     "zai".to_string(),
-                    ProviderConfig { enabled: true, api_key: None, base_url: None },
-                ),
-                (
-                    "agents".to_string(),
                     ProviderConfig { enabled: true, api_key: None, base_url: None },
                 ),
                 (
