@@ -189,15 +189,13 @@ impl StageHandler for GenerateHandler {
         context.billable_tokens = result.output_tokens;
         for chunk in result.chunks {
             context.output_text.push_str(&chunk);
-            if context.client_connected {
-                if let Some(sender) = &self.sender {
-                    let _ = sender
-                        .send(Ok(ResponseEvent::OutputTextDelta {
-                            id: context.request_id.clone(),
-                            delta: chunk,
-                        }))
-                        .await;
-                }
+            if context.client_connected && let Some(sender) = &self.sender {
+                let _ = sender
+                    .send(Ok(ResponseEvent::OutputTextDelta {
+                        id: context.request_id.clone(),
+                        delta: chunk,
+                    }))
+                    .await;
             }
         }
 
@@ -323,25 +321,25 @@ impl ExecutionEngine {
         let mut context = ExecutionContext::new(request, self.billing_enabled);
 
         let ingest = IngestHandler;
-        self.run_stage(&ingest, &mut context, disconnect_at).await?;
+        self.run_stage(&ingest, &mut context, disconnect_at.as_ref()).await?;
 
         let tokenize = TokenizeHandler;
-        self.run_stage(&tokenize, &mut context, disconnect_at).await?;
+        self.run_stage(&tokenize, &mut context, disconnect_at.as_ref()).await?;
 
         #[cfg(feature = "billing")]
         if context.billing_enabled {
             let hold = HoldHandler { usage_client: Arc::clone(&self.usage_client) };
-            self.run_stage(&hold, &mut context, disconnect_at).await?;
+            self.run_stage(&hold, &mut context, disconnect_at.as_ref()).await?;
         }
 
         let generate =
             GenerateHandler { provider: Arc::clone(&self.provider), sender: sender.clone() };
-        self.run_stage(&generate, &mut context, disconnect_at).await?;
+        self.run_stage(&generate, &mut context, disconnect_at.as_ref()).await?;
 
         #[cfg(feature = "billing")]
         if context.billing_enabled {
             let finalize = FinalizeHandler { usage_client: Arc::clone(&self.usage_client) };
-            self.run_stage(&finalize, &mut context, disconnect_at).await?;
+            self.run_stage(&finalize, &mut context, disconnect_at.as_ref()).await?;
         }
 
         if context.state != KernelState::Done {
@@ -380,7 +378,7 @@ impl ExecutionEngine {
         &self,
         handler: &H,
         context: &mut ExecutionContext,
-        disconnect_at: Option<StageName>,
+        disconnect_at: Option<&StageName>,
     ) -> Result<(), CoreError> {
         let stage = handler.stage();
         let span = info_span!(
@@ -392,7 +390,7 @@ impl ExecutionEngine {
         );
 
         async move {
-            if disconnect_at.as_ref() == Some(&stage) {
+            if disconnect_at == Some(&stage) {
                 context.client_connected = false;
                 match stage {
                     StageName::Ingest | StageName::Tokenize | StageName::Hold => {
@@ -421,7 +419,7 @@ mod tests {
         Fail,
     }
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Clone, PartialEq, Eq)]
     struct CoreFixture<'a> {
         name: &'a str,
         model: &'a str,
@@ -651,7 +649,7 @@ billing_enabled=false
                 r#"
 kind=err
 error_kind=ClientDisconnected
-error=client disconnected during ingest
+error=client disconnected during Ingest
 "#,
             ),
             (

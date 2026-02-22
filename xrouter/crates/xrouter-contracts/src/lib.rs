@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum StageName {
     Ingest,
@@ -10,7 +11,7 @@ pub enum StageName {
     Finalize,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
 pub struct ResponsesRequest {
     pub model: String,
     pub input: String,
@@ -18,14 +19,14 @@ pub struct ResponsesRequest {
     pub stream: bool,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
 pub struct Usage {
     pub input_tokens: u32,
     pub output_tokens: u32,
     pub total_tokens: u32,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
 pub struct ResponsesResponse {
     pub id: String,
     pub status: String,
@@ -33,7 +34,7 @@ pub struct ResponsesResponse {
     pub usage: Usage,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseEvent {
     OutputTextDelta { id: String, delta: String },
@@ -41,13 +42,13 @@ pub enum ResponseEvent {
     ResponseError { id: String, message: String },
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
 pub struct ChatCompletionsRequest {
     pub model: String,
     pub messages: Vec<ChatMessage>,
@@ -55,14 +56,14 @@ pub struct ChatCompletionsRequest {
     pub stream: bool,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
 pub struct ChatChoice {
     pub index: u32,
     pub message: ChatMessage,
     pub finish_reason: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
 pub struct ChatCompletionsResponse {
     pub id: String,
     pub object: String,

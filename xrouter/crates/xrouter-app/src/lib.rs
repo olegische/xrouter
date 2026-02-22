@@ -10,7 +10,11 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tracing::instrument;
+use utoipa::{OpenApi, ToSchema};
+use utoipa_swagger_ui::SwaggerUi;
 use xrouter_clients_openai::OpenAiCompatibleClient;
+#[cfg(feature = "billing")]
+use xrouter_clients_usage::InMemoryUsageClient;
 use xrouter_contracts::{
     ChatCompletionsRequest, ChatCompletionsResponse, ResponseEvent, ResponsesRequest,
     ResponsesResponse,
@@ -26,6 +30,96 @@ struct ModelCatalogEntry {
     context_length: u32,
     max_completion_tokens: u32,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct HealthResponse {
+    status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct CompatibleModelEntry {
+    id: String,
+    object: String,
+    created: i64,
+    owned_by: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct CompatibleModelsResponse {
+    object: String,
+    data: Vec<CompatibleModelEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct ModelArchitecture {
+    modality: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct ModelTopProvider {
+    context_length: u32,
+    max_completion_tokens: u32,
+    is_moderated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct ModelPerRequestLimits {
+    prompt_tokens: u32,
+    completion_tokens: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct XrouterModelEntry {
+    id: String,
+    name: String,
+    description: String,
+    context_length: u32,
+    architecture: ModelArchitecture,
+    top_provider: ModelTopProvider,
+    per_request_limits: ModelPerRequestLimits,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct XrouterModelsResponse {
+    data: Vec<XrouterModelEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+struct ErrorResponse {
+    error: String,
+}
+
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        get_health,
+        get_compatible_models,
+        get_xrouter_models,
+        post_responses,
+        post_chat_completions
+    ),
+    components(
+        schemas(
+            HealthResponse,
+            ErrorResponse,
+            CompatibleModelEntry,
+            CompatibleModelsResponse,
+            ModelArchitecture,
+            ModelTopProvider,
+            ModelPerRequestLimits,
+            XrouterModelEntry,
+            XrouterModelsResponse,
+            ResponsesRequest,
+            ResponsesResponse,
+            ChatCompletionsRequest,
+            ChatCompletionsResponse
+        )
+    ),
+    tags(
+        (name = "xrouter-app", description = "xrouter application API")
+    )
+)]
+struct ApiDoc;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -43,6 +137,10 @@ impl AppState {
                 continue;
             }
             let client = Arc::new(OpenAiCompatibleClient::new(provider.to_string()));
+            #[cfg(feature = "billing")]
+            let engine =
+                Arc::new(ExecutionEngine::new(client, Arc::new(InMemoryUsageClient::default()), false));
+            #[cfg(not(feature = "billing"))]
             let engine = Arc::new(ExecutionEngine::new(client, false));
             engines.insert(provider.to_string(), engine);
         }
@@ -111,10 +209,10 @@ impl AppState {
     }
 
     fn resolve_provider_key(&self, model: &str) -> String {
-        if let Some((candidate, _rest)) = model.split_once('/') {
-            if self.engines.contains_key(candidate) {
-                return candidate.to_string();
-            }
+        if let Some((candidate, _rest)) = model.split_once('/')
+            && self.engines.contains_key(candidate)
+        {
+            return candidate.to_string();
         }
 
         if let Some(found) = self.models.iter().find(|m| m.id == model) {
@@ -134,67 +232,93 @@ impl AppState {
 
 pub fn build_router(state: AppState) -> Router {
     let openai_compatible_api = state.openai_compatible_api;
-    let router = Router::new().route("/health", get(get_health)).with_state(state);
-
-    if openai_compatible_api {
-        router
+    let router = if openai_compatible_api {
+        Router::new()
+            .route("/health", get(get_health))
             .route("/v1/models", get(get_compatible_models))
             .route("/v1/responses", post(post_responses))
             .route("/v1/chat/completions", post(post_chat_completions))
     } else {
-        router
+        Router::new()
+            .route("/health", get(get_health))
             .route("/api/v1/models", get(get_xrouter_models))
             .route("/api/v1/responses", post(post_responses))
             .route("/api/v1/chat/completions", post(post_chat_completions))
-    }
+    };
+
+    router.with_state(state).merge(SwaggerUi::new("/docs").url("/openapi.json", ApiDoc::openapi()))
 }
 
-async fn get_health() -> Json<Value> {
-    Json(json!({"status": "healthy"}))
+#[utoipa::path(
+    get,
+    path = "/health",
+    responses((status = 200, description = "Service health", body = HealthResponse)),
+    tag = "xrouter-app"
+)]
+async fn get_health() -> Json<HealthResponse> {
+    Json(HealthResponse { status: "healthy".to_string() })
 }
 
-async fn get_compatible_models(State(state): State<AppState>) -> Json<Value> {
+#[utoipa::path(
+    get,
+    path = "/v1/models",
+    responses((status = 200, description = "OpenAI-compatible model list", body = CompatibleModelsResponse)),
+    tag = "xrouter-app"
+)]
+async fn get_compatible_models(State(state): State<AppState>) -> Json<CompatibleModelsResponse> {
     let data = state
         .models
         .iter()
-        .map(|m| {
-            json!({
-                "id": m.id,
-                "object": "model",
-                "created": 1710979200,
-                "owned_by": m.provider,
-            })
+        .map(|m| CompatibleModelEntry {
+            id: m.id.clone(),
+            object: "model".to_string(),
+            created: 1_710_979_200,
+            owned_by: m.provider.clone(),
         })
         .collect::<Vec<_>>();
-    Json(json!({"object": "list", "data": data}))
+    Json(CompatibleModelsResponse { object: "list".to_string(), data })
 }
 
-async fn get_xrouter_models(State(state): State<AppState>) -> Json<Value> {
+#[utoipa::path(
+    get,
+    path = "/api/v1/models",
+    responses((status = 200, description = "xrouter model list", body = XrouterModelsResponse)),
+    tag = "xrouter-app"
+)]
+async fn get_xrouter_models(State(state): State<AppState>) -> Json<XrouterModelsResponse> {
     let data = state
         .models
         .iter()
-        .map(|m| {
-            json!({
-                "id": m.id,
-                "name": m.id,
-                "description": format!("{} model", m.provider),
-                "context_length": m.context_length,
-                "architecture": {"modality": "text->text"},
-                "top_provider": {
-                    "context_length": m.context_length,
-                    "max_completion_tokens": m.max_completion_tokens,
-                    "is_moderated": true
-                },
-                "per_request_limits": {
-                    "prompt_tokens": m.context_length.saturating_sub(1024),
-                    "completion_tokens": m.max_completion_tokens
-                }
-            })
+        .map(|m| XrouterModelEntry {
+            id: m.id.clone(),
+            name: m.id.clone(),
+            description: format!("{} model", m.provider),
+            context_length: m.context_length,
+            architecture: ModelArchitecture { modality: "text->text".to_string() },
+            top_provider: ModelTopProvider {
+                context_length: m.context_length,
+                max_completion_tokens: m.max_completion_tokens,
+                is_moderated: true,
+            },
+            per_request_limits: ModelPerRequestLimits {
+                prompt_tokens: m.context_length.saturating_sub(1024),
+                completion_tokens: m.max_completion_tokens,
+            },
         })
         .collect::<Vec<_>>();
-    Json(json!({"data": data}))
+    Json(XrouterModelsResponse { data })
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/responses",
+    request_body = ResponsesRequest,
+    responses(
+        (status = 200, description = "Responses API result", body = ResponsesResponse),
+        (status = 400, description = "Validation or provider error", body = ErrorResponse)
+    ),
+    tag = "xrouter-app"
+)]
 #[instrument(skip(state, request), fields(model = %request.model, stream = request.stream))]
 async fn post_responses(
     State(state): State<AppState>,
@@ -269,6 +393,16 @@ async fn post_responses(
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/v1/chat/completions",
+    request_body = ChatCompletionsRequest,
+    responses(
+        (status = 200, description = "Chat Completions API result", body = ChatCompletionsResponse),
+        (status = 400, description = "Validation or provider error", body = ErrorResponse)
+    ),
+    tag = "xrouter-app"
+)]
 #[instrument(skip(state, request), fields(model = %request.model, stream = request.stream))]
 async fn post_chat_completions(
     State(state): State<AppState>,
@@ -325,7 +459,8 @@ async fn run_responses_request(
 }
 
 fn error_response(err: CoreError) -> Response {
-    (axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": err.to_string()}))).into_response()
+    (axum::http::StatusCode::BAD_REQUEST, Json(ErrorResponse { error: err.to_string() }))
+        .into_response()
 }
 
 #[cfg(test)]
@@ -416,10 +551,10 @@ mod tests {
             return format!("json={}", value);
         };
 
-        if let Some(status) = obj.get("status").and_then(Value::as_str) {
-            if obj.len() == 1 {
-                return format!("json.status={status}");
-            }
+        if let Some(status) = obj.get("status").and_then(Value::as_str)
+            && obj.len() == 1
+        {
+            return format!("json.status={status}");
         }
 
         if let Some(error) = obj.get("error").and_then(Value::as_str) {

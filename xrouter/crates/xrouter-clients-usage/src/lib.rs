@@ -10,7 +10,9 @@ use xrouter_core::{CoreError, FinalizeResult, UsageClient};
 
 #[derive(Default)]
 struct BillingState {
+    #[cfg(feature = "billing")]
     holds: HashSet<String>,
+    #[cfg(feature = "billing")]
     finalized: HashSet<String>,
     force_recovery: HashSet<String>,
     external_recovery: HashSet<String>,

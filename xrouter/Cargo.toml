@@ -10,9 +10,9 @@ members = [
 resolver = "2"
 
 [workspace.package]
-edition = "2021"
+edition = "2024"
 version = "0.1.0"
-license = "MIT"
+license = "Apache-2.0"
 
 [workspace.dependencies]
 anyhow = "1"
@@ -32,3 +32,5 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-opentelemetry = "0.29"
 opentelemetry = "0.28"
 uuid = { version = "1", features = ["v4", "serde"] }
+utoipa = { version = "5", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "9", features = ["axum", "vendored"] }

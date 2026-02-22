@@ -41,5 +41,12 @@ just run
 or inline:
 
 ```bash
-OPENROUTER_API_KEY=... XR_PORT=3000 cargo run -p xrouter-app
+OPENROUTER_API_KEY=... XR_PORT=8900 cargo run -p xrouter-app
 ```
+
+## API docs
+
+When server is running, OpenAPI and Swagger UI are available at:
+
+- `http://<XR_HOST>:<XR_PORT>/openapi.json`
+- `http://<XR_HOST>:<XR_PORT>/docs`
