@@ -18,7 +18,10 @@ use serde_json::{Value, json};
 use tracing::{debug, error, info, warn};
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
-use xrouter_clients_openai::OpenAiCompatibleClient;
+use xrouter_clients_openai::{
+    DeepSeekClient, GigachatClient, MockProviderClient, OpenAiClient, OpenRouterClient,
+    YandexResponsesClient, ZaiClient, build_http_client,
+};
 #[cfg(feature = "billing")]
 use xrouter_clients_usage::InMemoryUsageClient;
 use xrouter_contracts::{
@@ -26,7 +29,8 @@ use xrouter_contracts::{
     ResponsesRequest, ResponsesResponse,
 };
 use xrouter_core::{
-    CoreError, ExecutionEngine, ModelDescriptor, default_model_catalog, synthesize_model_id,
+    CoreError, ExecutionEngine, ModelDescriptor, ProviderClient, default_model_catalog,
+    synthesize_model_id,
 };
 
 pub mod config;
@@ -520,26 +524,56 @@ impl AppState {
         debug!(event = "app.config.providers", enabled_providers = ?enabled_providers);
 
         let mut engines = HashMap::new();
-        let shared_http_client = if cfg!(test) {
-            None
-        } else {
-            OpenAiCompatibleClient::build_http_client(config.provider_timeout_seconds)
-        };
+        let shared_http_client =
+            if cfg!(test) { None } else { build_http_client(config.provider_timeout_seconds) };
         for (provider, provider_config) in &config.providers {
             if !provider_config.enabled {
                 continue;
             }
-            let client = if cfg!(test) {
-                Arc::new(OpenAiCompatibleClient::mock(provider.to_string()))
+            let client: Arc<dyn ProviderClient> = if cfg!(test) {
+                Arc::new(MockProviderClient::new(provider.to_string()))
             } else {
-                Arc::new(OpenAiCompatibleClient::new_with_http_client(
-                    provider.to_string(),
-                    provider_config.base_url.clone(),
-                    provider_config.api_key.clone(),
-                    provider_config.project.clone(),
-                    shared_http_client.clone(),
-                    Some(config.provider_max_inflight),
-                ))
+                match provider.as_str() {
+                    "openrouter" => Arc::new(OpenRouterClient::new(
+                        provider_config.base_url.clone(),
+                        provider_config.api_key.clone(),
+                        shared_http_client.clone(),
+                        Some(config.provider_max_inflight),
+                    )),
+                    "deepseek" => Arc::new(DeepSeekClient::new(
+                        provider_config.base_url.clone(),
+                        provider_config.api_key.clone(),
+                        shared_http_client.clone(),
+                        Some(config.provider_max_inflight),
+                    )),
+                    "zai" => Arc::new(ZaiClient::new(
+                        provider_config.base_url.clone(),
+                        provider_config.api_key.clone(),
+                        shared_http_client.clone(),
+                        Some(config.provider_max_inflight),
+                    )),
+                    "yandex" => Arc::new(YandexResponsesClient::new(
+                        provider_config.base_url.clone(),
+                        provider_config.api_key.clone(),
+                        provider_config.project.clone(),
+                        shared_http_client.clone(),
+                        Some(config.provider_max_inflight),
+                    )),
+                    "gigachat" => Arc::new(GigachatClient::new(
+                        provider_config.base_url.clone(),
+                        provider_config.api_key.clone(),
+                        None,
+                        shared_http_client.clone(),
+                        Some(config.provider_max_inflight),
+                    )),
+                    _ => Arc::new(OpenAiClient::new(
+                        provider.to_string(),
+                        provider_config.base_url.clone(),
+                        provider_config.api_key.clone(),
+                        shared_http_client.clone(),
+                        Some(config.provider_max_inflight),
+                    )),
+                }
             };
             #[cfg(feature = "billing")]
             let engine = Arc::new(ExecutionEngine::new(

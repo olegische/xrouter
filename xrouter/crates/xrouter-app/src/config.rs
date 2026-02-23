@@ -211,6 +211,7 @@ fn default_provider_base_url(provider: &str) -> Option<&'static str> {
     match provider {
         "deepseek" => Some("https://api.deepseek.com"),
         "openrouter" => Some("https://openrouter.ai/api/v1"),
+        "gigachat" => Some("https://gigachat.devices.sberbank.ru/api/v1"),
         "zai" => Some("https://api.z.ai/api/paas/v4"),
         "yandex" => Some("https://ai.api.cloud.yandex.net/v1"),
         _ => None,
