@@ -11,6 +11,7 @@ use reqwest::Client;
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
 use tokio::sync::{Semaphore, mpsc};
+use tokio::time::sleep;
 use tracing::{debug, warn};
 use uuid::Uuid;
 use xrouter_contracts::{
@@ -101,46 +102,70 @@ impl HttpRuntime {
         extra_headers: &[(String, String)],
     ) -> Result<reqwest::Response, CoreError> {
         let _permit = self.acquire_inflight_permit()?;
-        let client = self.client()?;
-        let mut request = client.post(url).header("Content-Type", "application/json").json(payload);
-        if let Some(token) = bearer_override.or(self.api_key()) {
-            request = request.bearer_auth(token);
-        }
-        for (name, value) in extra_headers {
-            request = request.header(name, value);
-        }
-        let response = request
-            .send()
-            .await
-            .map_err(|err| CoreError::Provider(format!("provider request failed: {err}")))?;
-        let status = response.status();
-        if status.is_success() {
-            return Ok(response);
+        for attempt in 1..=2 {
+            let client = self.client()?;
+            let mut request =
+                client.post(url).header("Content-Type", "application/json").json(payload);
+            if let Some(token) = bearer_override.or(self.api_key()) {
+                request = request.bearer_auth(token);
+            }
+            for (name, value) in extra_headers {
+                request = request.header(name, value);
+            }
+            let response = request
+                .send()
+                .await
+                .map_err(|err| CoreError::Provider(format!("provider request failed: {err}")))?;
+            let status = response.status();
+            if status.is_success() {
+                return Ok(response);
+            }
+
+            let body = response.text().await.unwrap_or_default();
+            let body_preview = truncate_for_debug(
+                body.replace('\n', "\\n").replace('\r', "\\r").as_str(),
+                UPSTREAM_ERROR_BODY_PREVIEW_LIMIT,
+            );
+            let retryable = should_retry_failed_status(&self.provider_id, status, &body, attempt);
+            warn!(
+                event = "provider.request.failed_status",
+                provider = %self.provider_id,
+                url = url,
+                status = %status,
+                body_bytes = body.len(),
+                attempt = attempt,
+                retryable = retryable,
+            );
+            debug!(
+                event = "provider.request.failed_status.body",
+                provider = %self.provider_id,
+                url = url,
+                status = %status,
+                attempt = attempt,
+                body_preview = %body_preview,
+            );
+
+            if retryable {
+                warn!(
+                    event = "provider.request.retrying",
+                    provider = %self.provider_id,
+                    url = url,
+                    status = %status,
+                    attempt = attempt,
+                    next_attempt = attempt + 1,
+                );
+                sleep(Duration::from_millis(300)).await;
+                continue;
+            }
+
+            let reason = status.canonical_reason().unwrap_or("Unknown");
+            return Err(CoreError::Provider(format!(
+                "provider returned error status: {status} ({reason}) for url ({url})"
+            )));
         }
 
-        let body = response.text().await.unwrap_or_default();
-        let body_preview = truncate_for_debug(
-            body.replace('\n', "\\n").replace('\r', "\\r").as_str(),
-            UPSTREAM_ERROR_BODY_PREVIEW_LIMIT,
-        );
-        warn!(
-            event = "provider.request.failed_status",
-            provider = %self.provider_id,
-            url = url,
-            status = %status,
-            body_bytes = body.len(),
-        );
-        debug!(
-            event = "provider.request.failed_status.body",
-            provider = %self.provider_id,
-            url = url,
-            status = %status,
-            body_preview = %body_preview,
-        );
-
-        let reason = status.canonical_reason().unwrap_or("Unknown");
         Err(CoreError::Provider(format!(
-            "provider returned error status: {status} ({reason}) for url ({url})"
+            "provider returned retryable error status after retries for url ({url})"
         )))
     }
 
@@ -192,7 +217,7 @@ impl HttpRuntime {
             }
             parse_buffer.push_str(&chunk);
             full_body.push_str(&chunk);
-            for frame in split_sse_frames(&mut parse_buffer) {
+            for frame in drain_sse_frames(&mut parse_buffer, false) {
                 for delta in extract_chat_delta_chunks(&frame, request_id)? {
                     delta_count += 1;
                     if should_log_stream_chunk_debug(delta_count) {
@@ -225,6 +250,41 @@ impl HttpRuntime {
                             }))
                             .await;
                     }
+                }
+            }
+        }
+        for frame in drain_sse_frames(&mut parse_buffer, true) {
+            for delta in extract_chat_delta_chunks(&frame, request_id)? {
+                delta_count += 1;
+                if should_log_stream_chunk_debug(delta_count) {
+                    debug!(
+                        event = "provider.stream.delta.received",
+                        provider = %self.provider_id,
+                        request_id = request_id,
+                        stream_kind = "chat_completions",
+                        delta_index = delta_count,
+                        delta_chars = delta.chars().count(),
+                        delta_preview = %truncate_for_debug(&delta, STREAM_DEBUG_PREVIEW_LIMIT)
+                    );
+                }
+                if let Some(tx) = sender {
+                    let _ = tx
+                        .send(Ok(ResponseEvent::OutputTextDelta {
+                            id: request_id.to_string(),
+                            delta: delta.clone(),
+                        }))
+                        .await;
+                }
+                all_chunks.push(delta);
+            }
+            if let Some(reasoning_delta) = extract_chat_reasoning_delta(&frame, request_id)? {
+                if let Some(tx) = sender {
+                    let _ = tx
+                        .send(Ok(ResponseEvent::ReasoningDelta {
+                            id: request_id.to_string(),
+                            delta: reasoning_delta,
+                        }))
+                        .await;
                 }
             }
         }
@@ -303,7 +363,7 @@ impl HttpRuntime {
             }
             parse_buffer.push_str(&chunk);
             full_body.push_str(&chunk);
-            for frame in split_sse_frames(&mut parse_buffer) {
+            for frame in drain_sse_frames(&mut parse_buffer, false) {
                 if let Some(delta) = extract_responses_text_delta(&frame)? {
                     delta_count += 1;
                     if should_log_stream_chunk_debug(delta_count) {
@@ -327,6 +387,31 @@ impl HttpRuntime {
                     }
                     all_chunks.push(delta);
                 }
+            }
+        }
+        for frame in drain_sse_frames(&mut parse_buffer, true) {
+            if let Some(delta) = extract_responses_text_delta(&frame)? {
+                delta_count += 1;
+                if should_log_stream_chunk_debug(delta_count) {
+                    debug!(
+                        event = "provider.stream.delta.received",
+                        provider = %self.provider_id,
+                        request_id = request_id,
+                        stream_kind = "responses",
+                        delta_index = delta_count,
+                        delta_chars = delta.chars().count(),
+                        delta_preview = %truncate_for_debug(&delta, STREAM_DEBUG_PREVIEW_LIMIT)
+                    );
+                }
+                if let Some(tx) = sender {
+                    let _ = tx
+                        .send(Ok(ResponseEvent::OutputTextDelta {
+                            id: request_id.to_string(),
+                            delta: delta.clone(),
+                        }))
+                        .await;
+                }
+                all_chunks.push(delta);
             }
         }
         let mut outcome = match map_responses_stream_text(&full_body) {
@@ -394,6 +479,21 @@ fn truncate_for_debug(text: &str, limit: usize) -> String {
         out.push(ch);
     }
     out
+}
+
+fn should_retry_failed_status(
+    provider_id: &str,
+    status: reqwest::StatusCode,
+    body: &str,
+    attempt: usize,
+) -> bool {
+    if attempt >= 2 {
+        return false;
+    }
+    // Z.AI may intermittently return transient 5xx Operation failed for large tool payloads.
+    provider_id == "zai"
+        && status.is_server_error()
+        && body.to_ascii_lowercase().contains("operation failed")
 }
 
 pub(crate) fn base_chat_payload(
@@ -621,6 +721,7 @@ fn map_chat_completion_stream_text(payload: &str) -> Result<ProviderOutcome, Cor
     let mut reasoning_details = Vec::<Value>::new();
     let mut output_tokens = None::<u32>;
     let mut tool_calls_by_index = HashMap::<usize, StreamToolCall>::new();
+    let mut direct_tool_calls = Vec::<ToolCall>::new();
 
     for event in extract_sse_data_events(payload) {
         if event == "[DONE]" {
@@ -640,6 +741,17 @@ fn map_chat_completion_stream_text(payload: &str) -> Result<ProviderOutcome, Cor
                 all_content.push_str(&content_delta);
                 chunks.push(content_delta);
             }
+            if let Some(message) = choice.message.as_ref() {
+                if let Some(content) = extract_message_content(&message.content)
+                    && !content.is_empty()
+                {
+                    all_content.push_str(&content);
+                    chunks.push(content);
+                }
+                if let Some(tool_calls) = message.tool_calls.as_ref() {
+                    direct_tool_calls.extend(map_provider_tool_calls(tool_calls));
+                }
+            }
 
             if let Some(text) = choice.delta.reasoning_content.or(choice.delta.reasoning)
                 && !text.trim().is_empty()
@@ -651,7 +763,13 @@ fn map_chat_completion_stream_text(payload: &str) -> Result<ProviderOutcome, Cor
                 reasoning_details.extend(details);
             }
 
-            for tool_delta in choice.delta.tool_calls.unwrap_or_default() {
+            for tool_delta in choice
+                .delta
+                .tool_calls
+                .unwrap_or_default()
+                .into_iter()
+                .chain(choice.tool_calls.unwrap_or_default())
+            {
                 let index = tool_delta.index.unwrap_or(tool_calls_by_index.len());
                 let entry = tool_calls_by_index.entry(index).or_default();
                 if let Some(id) = tool_delta.id.filter(|v| !v.trim().is_empty()) {
@@ -672,7 +790,14 @@ fn map_chat_completion_stream_text(payload: &str) -> Result<ProviderOutcome, Cor
         }
     }
 
-    let tool_calls = finalize_stream_tool_calls(tool_calls_by_index);
+    let mut tool_calls = finalize_stream_tool_calls(tool_calls_by_index);
+    if !direct_tool_calls.is_empty() {
+        if let Some(existing) = tool_calls.as_mut() {
+            existing.extend(direct_tool_calls);
+        } else {
+            tool_calls = Some(direct_tool_calls);
+        }
+    }
     let reasoning = if reasoning.trim().is_empty() { None } else { Some(reasoning) };
     let reasoning_details =
         if reasoning_details.is_empty() { None } else { Some(reasoning_details) };
@@ -769,15 +894,25 @@ fn map_responses_stream_text(payload: &str) -> Result<ProviderOutcome, CoreError
 
 fn extract_sse_data_events(payload: &str) -> Vec<String> {
     let mut owned = payload.replace('\r', "");
-    split_sse_frames(&mut owned).into_iter().filter_map(|frame| sse_frame_to_data(&frame)).collect()
+    drain_sse_frames(&mut owned, true)
+        .into_iter()
+        .filter_map(|frame| sse_frame_to_data(&frame))
+        .collect()
 }
 
-fn split_sse_frames(buffer: &mut String) -> Vec<String> {
+fn drain_sse_frames(buffer: &mut String, flush_tail: bool) -> Vec<String> {
     let mut frames = Vec::new();
     while let Some(idx) = buffer.find("\n\n") {
         let frame = buffer[..idx].to_string();
         buffer.replace_range(..idx + 2, "");
         frames.push(frame);
+    }
+    if flush_tail {
+        let tail = buffer.trim();
+        if !tail.is_empty() {
+            frames.push(tail.to_string());
+            buffer.clear();
+        }
     }
     frames
 }
@@ -924,6 +1059,10 @@ struct ChatCompletionsStreamChunk {
 struct StreamChoice {
     #[serde(default)]
     delta: StreamMessageDelta,
+    #[serde(default)]
+    tool_calls: Option<Vec<ProviderToolCallDelta>>,
+    #[serde(default)]
+    message: Option<Message>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1218,7 +1357,7 @@ mod tests {
     #[test]
     fn zai_enables_thinking_when_effort_present() {
         let input = text_input("Reply with ok");
-        let payload = build_zai_payload("glm-5", &input, Some(&reasoning("high")), None, None);
+        let (payload, _) = build_zai_payload("glm-5", &input, Some(&reasoning("high")), None, None);
         assert_eq!(payload["thinking"]["type"], "enabled");
         assert!(payload.get("reasoning").is_none());
     }
@@ -1226,7 +1365,7 @@ mod tests {
     #[test]
     fn zai_disables_thinking_when_effort_none() {
         let input = text_input("Reply with ok");
-        let payload = build_zai_payload("glm-5", &input, Some(&reasoning("none")), None, None);
+        let (payload, _) = build_zai_payload("glm-5", &input, Some(&reasoning("none")), None, None);
         assert_eq!(payload["thinking"]["type"], "disabled");
         assert!(payload.get("reasoning").is_none());
     }
@@ -1397,6 +1536,48 @@ mod tests {
     }
 
     #[test]
+    fn chat_sse_without_trailing_separator_is_not_empty() {
+        let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"index\":0,\"finish_reason\":null}]}";
+        let outcome = map_chat_completion_stream_text(sse).expect("SSE tail frame must parse");
+        assert_eq!(outcome.chunks.join(""), "ok");
+    }
+
+    #[test]
+    fn responses_sse_without_trailing_separator_is_not_empty() {
+        let sse = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}";
+        let outcome = map_responses_stream_text(sse).expect("SSE tail frame must parse");
+        assert_eq!(outcome.chunks.join(""), "ok");
+    }
+
+    #[test]
+    fn chat_sse_with_choice_level_tool_calls_is_not_empty() {
+        let sse = concat!(
+            "data: {\"choices\":[{\"delta\":{},\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\\\"Kyiv\\\"}\"}}],\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let outcome =
+            map_chat_completion_stream_text(sse).expect("choice-level tool_calls must parse");
+        let tool_calls = outcome.tool_calls.expect("tool calls must be present");
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].function.name, "get_weather");
+        assert_eq!(tool_calls[0].function.arguments, "{\"city\":\"Kyiv\"}");
+    }
+
+    #[test]
+    fn chat_sse_with_message_level_tool_calls_is_not_empty() {
+        let sse = concat!(
+            "data: {\"choices\":[{\"delta\":{},\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\\\"Kyiv\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let outcome =
+            map_chat_completion_stream_text(sse).expect("message-level tool_calls must parse");
+        let tool_calls = outcome.tool_calls.expect("tool calls must be present");
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].function.name, "get_weather");
+        assert_eq!(tool_calls[0].function.arguments, "{\"city\":\"Kyiv\"}");
+    }
+
+    #[test]
     fn upstream_stream_flag_is_forced_true_for_all_providers() {
         // CONTRACT GUARD: do not weaken this test.
         // All upstream provider requests must always be sent with stream=true.
@@ -1409,7 +1590,7 @@ mod tests {
             build_openrouter_payload("openai/gpt-5-mini", &input, None, None, None);
         assert_eq!(openrouter["stream"], Value::Bool(true));
 
-        let zai = build_zai_payload("glm-5", &input, None, None, None);
+        let (zai, _) = build_zai_payload("glm-5", &input, None, None, None);
         assert_eq!(zai["stream"], Value::Bool(true));
 
         let gigachat = crate::clients::gigachat::build_gigachat_payload("GigaChat-Pro", &input);
@@ -1420,5 +1601,43 @@ mod tests {
 
         let (deepseek, _) = build_deepseek_payload("deepseek-chat", &input, None, None, None);
         assert_eq!(deepseek["stream"], Value::Bool(true));
+    }
+
+    #[test]
+    fn retries_zai_transient_operation_failed_once() {
+        assert!(should_retry_failed_status(
+            "zai",
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            "{\"error\":{\"code\":\"500\",\"message\":\"Operation failed\"}}",
+            1,
+        ));
+        assert!(!should_retry_failed_status(
+            "zai",
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            "{\"error\":{\"code\":\"500\",\"message\":\"Operation failed\"}}",
+            2,
+        ));
+    }
+
+    #[test]
+    fn does_not_retry_non_zai_or_non_matching_failures() {
+        assert!(!should_retry_failed_status(
+            "deepseek",
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            "{\"error\":{\"message\":\"Operation failed\"}}",
+            1,
+        ));
+        assert!(!should_retry_failed_status(
+            "zai",
+            reqwest::StatusCode::BAD_REQUEST,
+            "{\"error\":{\"message\":\"Operation failed\"}}",
+            1,
+        ));
+        assert!(!should_retry_failed_status(
+            "zai",
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            "{\"error\":{\"message\":\"Different\"}}",
+            1,
+        ));
     }
 }
