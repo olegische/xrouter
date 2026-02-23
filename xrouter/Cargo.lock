@@ -2212,6 +2212,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "xrouter-contracts",
  "xrouter-core",
 ]
 
@@ -2229,6 +2230,7 @@ name = "xrouter-contracts"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "utoipa",
  "uuid",
 ]

@@ -3,8 +3,9 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Map, Value, json};
 use tokio::sync::Semaphore;
+use xrouter_contracts::ReasoningConfig;
 use xrouter_core::{CoreError, ProviderClient, ProviderOutcome};
 
 #[derive(Debug, Clone, Copy)]
@@ -80,13 +81,14 @@ impl OpenAiCompatibleClient {
             None
         };
 
-        Ok(ProviderOutcome { chunks, output_tokens, reasoning })
+        Ok(ProviderOutcome { chunks, output_tokens, reasoning, reasoning_details: None })
     }
 
     async fn remote_generate(
         &self,
         model: &str,
         input: &str,
+        reasoning: Option<&ReasoningConfig>,
     ) -> Result<ProviderOutcome, CoreError> {
         let Some(base_url) = self.base_url.as_deref().filter(|v| !v.trim().is_empty()) else {
             return Err(CoreError::Provider("provider base_url is not configured".to_string()));
@@ -109,12 +111,9 @@ impl OpenAiCompatibleClient {
             .ok_or_else(|| CoreError::Provider("provider client init failed".to_string()))?;
 
         let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+        let payload = build_request_payload(&self.provider_id, model, input, reasoning);
         let mut request =
-            client.post(url).header("Content-Type", "application/json").json(&json!({
-                "model": model,
-                "messages": [{"role": "user", "content": input}],
-                "stream": false
-            }));
+            client.post(url).header("Content-Type", "application/json").json(&payload);
 
         if let Some(api_key) = self.api_key.as_deref().filter(|v| !v.trim().is_empty()) {
             request = request.bearer_auth(api_key);
@@ -144,21 +143,81 @@ impl OpenAiCompatibleClient {
             .usage
             .and_then(|usage| usage.completion_tokens)
             .unwrap_or_else(|| content.split_whitespace().count() as u32);
-        let reasoning =
-            first.message.reasoning_content.clone().or_else(|| first.message.reasoning.clone());
+        let reasoning_details = first.message.reasoning_details.clone();
+        let reasoning = first
+            .message
+            .reasoning_content
+            .clone()
+            .or_else(|| first.message.reasoning.clone())
+            .or_else(|| {
+                reasoning_details
+                    .as_ref()
+                    .and_then(|details| extract_reasoning_from_details(details))
+            });
 
-        Ok(ProviderOutcome { chunks, output_tokens, reasoning })
+        Ok(ProviderOutcome { chunks, output_tokens, reasoning, reasoning_details })
     }
 }
 
 #[async_trait]
 impl ProviderClient for OpenAiCompatibleClient {
-    async fn generate(&self, model: &str, input: &str) -> Result<ProviderOutcome, CoreError> {
+    async fn generate(
+        &self,
+        model: &str,
+        input: &str,
+        reasoning: Option<&ReasoningConfig>,
+    ) -> Result<ProviderOutcome, CoreError> {
         match self.mode {
-            ClientMode::Real => self.remote_generate(model, input).await,
+            ClientMode::Real => self.remote_generate(model, input, reasoning).await,
             ClientMode::Mock => self.mock_generate(model, input),
         }
     }
+}
+
+fn build_request_payload(
+    provider_id: &str,
+    model: &str,
+    input: &str,
+    reasoning: Option<&ReasoningConfig>,
+) -> Value {
+    let mut payload = Map::new();
+    payload.insert("model".to_string(), Value::String(model.to_string()));
+    payload.insert("messages".to_string(), json!([{ "role": "user", "content": input }]));
+    payload.insert("stream".to_string(), Value::Bool(false));
+
+    match provider_id {
+        "openrouter" => {
+            if let Some(reasoning_cfg) = reasoning
+                && let Ok(value) = serde_json::to_value(reasoning_cfg)
+            {
+                payload.insert("reasoning".to_string(), value);
+            }
+        }
+        "deepseek" => {
+            let has_effort = reasoning
+                .and_then(|cfg| cfg.effort.as_deref())
+                .is_some_and(|value| !value.trim().is_empty());
+            if model == "deepseek-chat" && has_effort {
+                payload.insert("thinking".to_string(), json!({ "type": "enabled" }));
+            }
+        }
+        _ => {
+            if let Some(reasoning_cfg) = normalize_openai_reasoning(reasoning) {
+                payload.insert("reasoning".to_string(), reasoning_cfg);
+            }
+        }
+    }
+
+    Value::Object(payload)
+}
+
+fn normalize_openai_reasoning(reasoning: Option<&ReasoningConfig>) -> Option<Value> {
+    let effort = reasoning?.effort.as_deref()?.trim();
+    if effort.is_empty() {
+        return None;
+    }
+    let mapped = if effort.eq_ignore_ascii_case("xhigh") { "high" } else { effort };
+    Some(json!({ "effort": mapped }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -181,6 +240,8 @@ struct Message {
     reasoning: Option<String>,
     #[serde(default)]
     reasoning_content: Option<String>,
+    #[serde(default)]
+    reasoning_details: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -201,5 +262,106 @@ fn extract_message_content(content: &serde_json::Value) -> Option<String> {
             if text.is_empty() { None } else { Some(text) }
         }
         _ => None,
+    }
+}
+
+fn extract_reasoning_from_details(details: &[serde_json::Value]) -> Option<String> {
+    let text = details
+        .iter()
+        .filter_map(|detail| {
+            let kind = detail.get("type").and_then(Value::as_str)?;
+            match kind {
+                "reasoning.summary" => detail.get("summary").and_then(Value::as_str),
+                "reasoning.text" => detail.get("text").and_then(Value::as_str),
+                _ => None,
+            }
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if text.is_empty() { None } else { Some(text) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reasoning(effort: &str) -> ReasoningConfig {
+        ReasoningConfig { effort: Some(effort.to_string()) }
+    }
+
+    #[test]
+    fn openrouter_keeps_reasoning_effort_as_is() {
+        let payload = build_request_payload(
+            "openrouter",
+            "openai/gpt-5.2",
+            "Reply with ok",
+            Some(&reasoning("xhigh")),
+        );
+        assert_eq!(payload["reasoning"]["effort"], "xhigh");
+        assert!(payload.get("thinking").is_none());
+    }
+
+    #[test]
+    fn deepseek_chat_enables_thinking_when_effort_present() {
+        let payload = build_request_payload(
+            "deepseek",
+            "deepseek-chat",
+            "Reply with ok",
+            Some(&reasoning("medium")),
+        );
+        assert_eq!(payload["thinking"]["type"], "enabled");
+        assert!(payload.get("reasoning").is_none());
+    }
+
+    #[test]
+    fn deepseek_reasoner_does_not_set_thinking() {
+        let payload = build_request_payload(
+            "deepseek",
+            "deepseek-reasoner",
+            "Reply with ok",
+            Some(&reasoning("high")),
+        );
+        assert!(payload.get("thinking").is_none());
+    }
+
+    #[test]
+    fn non_openrouter_maps_xhigh_to_high() {
+        let payload = build_request_payload(
+            "xrouter",
+            "gpt-4.1-mini",
+            "Reply with ok",
+            Some(&reasoning("xhigh")),
+        );
+        assert_eq!(payload["reasoning"]["effort"], "high");
+    }
+
+    #[test]
+    fn reasoning_details_summary_is_extracted() {
+        let details = vec![json!({
+            "type": "reasoning.summary",
+            "summary": "A concise summary"
+        })];
+        assert_eq!(extract_reasoning_from_details(&details), Some("A concise summary".to_string()));
+    }
+
+    #[test]
+    fn reasoning_details_text_and_summary_are_joined() {
+        let details = vec![
+            json!({
+                "type": "reasoning.summary",
+                "summary": "Summary"
+            }),
+            json!({
+                "type": "reasoning.text",
+                "text": "Detailed chain"
+            }),
+        ];
+        assert_eq!(
+            extract_reasoning_from_details(&details),
+            Some("Summary\nDetailed chain".to_string())
+        );
     }
 }

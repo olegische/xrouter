@@ -6,8 +6,9 @@ use tokio_stream::wrappers::ReceiverStream;
 use tracing::{Instrument, error, info, info_span, warn};
 use uuid::Uuid;
 use xrouter_contracts::{
-    ResponseEvent, ResponseOutputItem, ResponseOutputText, ResponseReasoningSummary,
-    ResponsesRequest, ResponsesResponse, StageName, ToolCall, ToolFunction, Usage,
+    ReasoningConfig, ResponseEvent, ResponseOutputItem, ResponseOutputText,
+    ResponseReasoningSummary, ResponsesRequest, ResponsesResponse, StageName, ToolCall,
+    ToolFunction, Usage,
 };
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
@@ -50,8 +51,10 @@ pub struct ExecutionContext {
     pub response_completed: bool,
     pub model: String,
     pub input: String,
+    pub request_reasoning: Option<ReasoningConfig>,
     pub output_text: String,
     pub reasoning: Option<String>,
+    pub reasoning_details: Option<Vec<serde_json::Value>>,
     pub input_tokens: u32,
     pub output_tokens: u32,
 }
@@ -73,8 +76,10 @@ impl ExecutionContext {
             response_completed: false,
             model: request.model,
             input: request.input,
+            request_reasoning: request.reasoning,
             output_text: String::new(),
             reasoning: None,
+            reasoning_details: None,
             input_tokens: 0,
             output_tokens: 0,
         }
@@ -86,6 +91,7 @@ pub struct ProviderOutcome {
     pub chunks: Vec<String>,
     pub output_tokens: u32,
     pub reasoning: Option<String>,
+    pub reasoning_details: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,7 +227,12 @@ pub fn default_model_catalog() -> Vec<ModelDescriptor> {
 
 #[async_trait]
 pub trait ProviderClient: Send + Sync {
-    async fn generate(&self, model: &str, input: &str) -> Result<ProviderOutcome, CoreError>;
+    async fn generate(
+        &self,
+        model: &str,
+        input: &str,
+        reasoning: Option<&ReasoningConfig>,
+    ) -> Result<ProviderOutcome, CoreError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -326,7 +337,11 @@ impl StageHandler for GenerateHandler {
             input_chars = context.input.len()
         );
         let provider_started_at = Instant::now();
-        let result = match self.provider.generate(&context.model, &context.input).await {
+        let result = match self
+            .provider
+            .generate(&context.model, &context.input, context.request_reasoning.as_ref())
+            .await
+        {
             Ok(result) => result,
             Err(error) => {
                 warn!(
@@ -349,6 +364,7 @@ impl StageHandler for GenerateHandler {
         context.output_tokens = result.output_tokens;
         context.billable_tokens = result.output_tokens;
         context.reasoning = result.reasoning;
+        context.reasoning_details = result.reasoning_details;
         if context.client_connected
             && let (Some(reasoning), Some(sender)) = (&context.reasoning, &self.sender)
         {
@@ -466,16 +482,23 @@ fn build_output_items(
     response_id: &str,
     output_text: &str,
     reasoning: Option<String>,
+    reasoning_details: Option<Vec<serde_json::Value>>,
     tool_calls: Option<Vec<ToolCall>>,
 ) -> Vec<ResponseOutputItem> {
     let mut output = Vec::new();
 
-    if let Some(reasoning_text) = reasoning
-        && !reasoning_text.trim().is_empty()
-    {
+    let has_reasoning_text = reasoning.as_ref().is_some_and(|value| !value.trim().is_empty());
+    let reasoning_content = reasoning_details.unwrap_or_default();
+    let has_reasoning_details = !reasoning_content.is_empty();
+    if has_reasoning_text || has_reasoning_details {
+        let summary = reasoning
+            .filter(|value| !value.trim().is_empty())
+            .map(|text| vec![ResponseReasoningSummary { text }])
+            .unwrap_or_default();
         output.push(ResponseOutputItem::Reasoning {
             id: format!("rs_{}", response_id),
-            summary: vec![ResponseReasoningSummary { text: reasoning_text }],
+            summary,
+            content: reasoning_content,
         });
     }
 
@@ -664,6 +687,7 @@ impl ExecutionEngine {
             &context.request_id,
             &context.output_text,
             context.reasoning.clone(),
+            context.reasoning_details.clone(),
             tool_calls.clone(),
         );
 
@@ -860,11 +884,21 @@ mod tests {
 
     #[async_trait]
     impl ProviderClient for FakeProvider {
-        async fn generate(&self, _model: &str, input: &str) -> Result<ProviderOutcome, CoreError> {
+        async fn generate(
+            &self,
+            _model: &str,
+            input: &str,
+            _reasoning: Option<&ReasoningConfig>,
+        ) -> Result<ProviderOutcome, CoreError> {
             match self.behavior {
                 ProviderBehavior::Success => {
                     let chunks = vec!["hello ".to_string(), input.to_string()];
-                    Ok(ProviderOutcome { output_tokens: 2, chunks, reasoning: None })
+                    Ok(ProviderOutcome {
+                        output_tokens: 2,
+                        chunks,
+                        reasoning: None,
+                        reasoning_details: None,
+                    })
                 }
                 ProviderBehavior::Fail => Err(CoreError::Provider("provider failed".to_string())),
             }
@@ -965,6 +999,7 @@ mod tests {
             model: fixture.model.to_string(),
             input: fixture.input.to_string(),
             stream: false,
+            reasoning: None,
         };
         let result = engine.execute_with_disconnect(request, disconnect).await;
         let actual_snapshot = render_result(result);

@@ -12,11 +12,19 @@ pub enum StageName {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
+pub struct ReasoningConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
 pub struct ResponsesRequest {
     pub model: String,
     pub input: String,
     #[serde(default)]
     pub stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<ReasoningConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
@@ -72,9 +80,23 @@ pub struct ResponseReasoningSummary {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseOutputItem {
-    Message { id: String, role: String, content: Vec<ResponseOutputText> },
-    Reasoning { id: String, summary: Vec<ResponseReasoningSummary> },
-    FunctionCall { id: String, call_id: String, name: String, arguments: String },
+    Message {
+        id: String,
+        role: String,
+        content: Vec<ResponseOutputText>,
+    },
+    Reasoning {
+        id: String,
+        summary: Vec<ResponseReasoningSummary>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        content: Vec<serde_json::Value>,
+    },
+    FunctionCall {
+        id: String,
+        call_id: String,
+        name: String,
+        arguments: String,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
@@ -100,6 +122,8 @@ pub struct ChatMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_details: Option<Vec<serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
 }
 
@@ -109,6 +133,8 @@ pub struct ChatCompletionsRequest {
     pub messages: Vec<ChatMessage>,
     #[serde(default)]
     pub stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<ReasoningConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
@@ -135,7 +161,12 @@ impl ChatCompletionsRequest {
             .collect::<Vec<_>>()
             .join("\n");
 
-        ResponsesRequest { model: self.model, input, stream: self.stream }
+        ResponsesRequest {
+            model: self.model,
+            input,
+            stream: self.stream,
+            reasoning: self.reasoning,
+        }
     }
 }
 
@@ -143,6 +174,7 @@ impl ChatCompletionsResponse {
     pub fn from_responses(response: ResponsesResponse) -> Self {
         let mut content = String::new();
         let mut reasoning = None;
+        let mut reasoning_details = None;
         let mut tool_calls = Vec::new();
 
         for item in &response.output {
@@ -152,9 +184,12 @@ impl ChatCompletionsResponse {
                         content = first.text.clone();
                     }
                 }
-                ResponseOutputItem::Reasoning { summary, .. } => {
+                ResponseOutputItem::Reasoning { summary, content: details, .. } => {
                     if let Some(first) = summary.first() {
                         reasoning = Some(first.text.clone());
+                    }
+                    if !details.is_empty() {
+                        reasoning_details = Some(details.clone());
                     }
                 }
                 ResponseOutputItem::FunctionCall { call_id, name, arguments, .. } => {
@@ -177,6 +212,7 @@ impl ChatCompletionsResponse {
                     content,
                     reasoning: reasoning.clone(),
                     reasoning_content: reasoning,
+                    reasoning_details,
                     tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
                 },
                 finish_reason: response.finish_reason,
