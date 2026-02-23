@@ -11,7 +11,7 @@ use reqwest::Client;
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
 use tokio::sync::{Semaphore, mpsc};
-use tracing::debug;
+use tracing::{debug, warn};
 use uuid::Uuid;
 use xrouter_contracts::{
     ResponseEvent, ResponseInputContent, ResponseInputItem, ResponsesInput, ToolCall, ToolFunction,
@@ -20,6 +20,7 @@ use xrouter_core::{CoreError, ProviderOutcome};
 
 const STREAM_DEBUG_SAMPLE_EVERY: usize = 25;
 const STREAM_DEBUG_PREVIEW_LIMIT: usize = 120;
+const UPSTREAM_ERROR_BODY_PREVIEW_LIMIT: usize = 600;
 
 pub fn build_http_client(timeout_seconds: u64) -> Option<Client> {
     Client::builder().connect_timeout(Duration::from_secs(timeout_seconds)).build().ok()
@@ -112,9 +113,35 @@ impl HttpRuntime {
             .send()
             .await
             .map_err(|err| CoreError::Provider(format!("provider request failed: {err}")))?;
-        response
-            .error_for_status()
-            .map_err(|err| CoreError::Provider(format!("provider returned error status: {err}")))
+        let status = response.status();
+        if status.is_success() {
+            return Ok(response);
+        }
+
+        let body = response.text().await.unwrap_or_default();
+        let body_preview = truncate_for_debug(
+            body.replace('\n', "\\n").replace('\r', "\\r").as_str(),
+            UPSTREAM_ERROR_BODY_PREVIEW_LIMIT,
+        );
+        warn!(
+            event = "provider.request.failed_status",
+            provider = %self.provider_id,
+            url = url,
+            status = %status,
+            body_bytes = body.len(),
+        );
+        debug!(
+            event = "provider.request.failed_status.body",
+            provider = %self.provider_id,
+            url = url,
+            status = %status,
+            body_preview = %body_preview,
+        );
+
+        let reason = status.canonical_reason().unwrap_or("Unknown");
+        Err(CoreError::Provider(format!(
+            "provider returned error status: {status} ({reason}) for url ({url})"
+        )))
     }
 
     async fn post_chat_completions_stream(
@@ -1147,7 +1174,7 @@ mod tests {
     #[test]
     fn openrouter_keeps_reasoning_effort_as_is() {
         let input = text_input("Reply with ok");
-        let payload = build_openrouter_payload(
+        let (payload, _) = build_openrouter_payload(
             "openai/gpt-5.2",
             &input,
             Some(&reasoning("xhigh")),
@@ -1378,7 +1405,8 @@ mod tests {
         let openai = build_openai_payload("gpt-4.1-mini", &input, None, None, None);
         assert_eq!(openai["stream"], Value::Bool(true));
 
-        let openrouter = build_openrouter_payload("openai/gpt-5-mini", &input, None, None, None);
+        let (openrouter, _) =
+            build_openrouter_payload("openai/gpt-5-mini", &input, None, None, None);
         assert_eq!(openrouter["stream"], Value::Bool(true));
 
         let zai = build_zai_payload("glm-5", &input, None, None, None);
