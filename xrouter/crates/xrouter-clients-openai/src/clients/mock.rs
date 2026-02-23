@@ -1,7 +1,5 @@
 use async_trait::async_trait;
-use serde_json::Value;
-use xrouter_contracts::{ReasoningConfig, ResponsesInput};
-use xrouter_core::{CoreError, ProviderClient, ProviderOutcome};
+use xrouter_core::{CoreError, ProviderClient, ProviderGenerateRequest, ProviderOutcome};
 
 pub struct MockProviderClient {
     provider_id: String,
@@ -17,16 +15,12 @@ impl MockProviderClient {
 impl ProviderClient for MockProviderClient {
     async fn generate(
         &self,
-        model: &str,
-        input: &ResponsesInput,
-        _reasoning: Option<&ReasoningConfig>,
-        _tools: Option<&[Value]>,
-        _tool_choice: Option<&Value>,
+        request: ProviderGenerateRequest<'_>,
     ) -> Result<ProviderOutcome, CoreError> {
         let mut chunks = Vec::new();
         let mut output_tokens = 0u32;
 
-        let input_text = input.to_canonical_text();
+        let input_text = request.input.to_canonical_text();
         for token in input_text.split_whitespace() {
             output_tokens = output_tokens.saturating_add(1);
             chunks.push(format!("{token} "));
@@ -37,7 +31,7 @@ impl ProviderClient for MockProviderClient {
         }
 
         chunks.insert(0, format!("[{}] ", self.provider_id));
-        let reasoning = if model.contains("deepseek-reasoner") {
+        let reasoning = if request.model.contains("deepseek-reasoner") {
             Some("Reasoned with DeepSeek reasoning mode before composing final answer.".to_string())
         } else {
             None

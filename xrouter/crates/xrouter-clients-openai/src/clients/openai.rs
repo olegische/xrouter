@@ -1,9 +1,11 @@
 use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::{Value, json};
-use tokio::sync::mpsc;
-use xrouter_contracts::{ReasoningConfig, ResponseEvent, ResponsesInput};
-use xrouter_core::{CoreError, ProviderClient, ProviderOutcome};
+use xrouter_contracts::{ReasoningConfig, ResponsesInput};
+use xrouter_core::{
+    CoreError, ProviderClient, ProviderGenerateRequest, ProviderGenerateStreamRequest,
+    ProviderOutcome,
+};
 
 use crate::{HttpRuntime, base_chat_payload};
 
@@ -29,31 +31,40 @@ impl OpenAiClient {
 impl ProviderClient for OpenAiClient {
     async fn generate(
         &self,
-        model: &str,
-        input: &ResponsesInput,
-        reasoning: Option<&ReasoningConfig>,
-        tools: Option<&[Value]>,
-        tool_choice: Option<&Value>,
+        request: ProviderGenerateRequest<'_>,
     ) -> Result<ProviderOutcome, CoreError> {
         let url = self.runtime.build_url("chat/completions")?;
-        let payload = build_openai_payload(model, input, reasoning, tools, tool_choice);
+        let payload = build_openai_payload(
+            request.model,
+            request.input,
+            request.reasoning,
+            request.tools,
+            request.tool_choice,
+        );
         self.runtime.post_chat_completions_stream("request", &url, &payload, None, &[], None).await
     }
 
     async fn generate_stream(
         &self,
-        request_id: &str,
-        model: &str,
-        input: &ResponsesInput,
-        reasoning: Option<&ReasoningConfig>,
-        tools: Option<&[Value]>,
-        tool_choice: Option<&Value>,
-        sender: Option<&mpsc::Sender<Result<ResponseEvent, CoreError>>>,
+        request: ProviderGenerateStreamRequest<'_>,
     ) -> Result<ProviderOutcome, CoreError> {
         let url = self.runtime.build_url("chat/completions")?;
-        let payload = build_openai_payload(model, input, reasoning, tools, tool_choice);
+        let payload = build_openai_payload(
+            request.request.model,
+            request.request.input,
+            request.request.reasoning,
+            request.request.tools,
+            request.request.tool_choice,
+        );
         self.runtime
-            .post_chat_completions_stream(request_id, &url, &payload, None, &[], sender)
+            .post_chat_completions_stream(
+                request.request_id,
+                &url,
+                &payload,
+                None,
+                &[],
+                request.sender,
+            )
             .await
     }
 }

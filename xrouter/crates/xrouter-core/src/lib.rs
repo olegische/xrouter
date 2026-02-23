@@ -301,27 +301,33 @@ pub fn default_model_catalog() -> Vec<ModelDescriptor> {
 pub trait ProviderClient: Send + Sync {
     async fn generate(
         &self,
-        model: &str,
-        input: &ResponsesInput,
-        reasoning: Option<&ReasoningConfig>,
-        tools: Option<&[serde_json::Value]>,
-        tool_choice: Option<&serde_json::Value>,
+        request: ProviderGenerateRequest<'_>,
     ) -> Result<ProviderOutcome, CoreError>;
 
     async fn generate_stream(
         &self,
-        request_id: &str,
-        model: &str,
-        input: &ResponsesInput,
-        reasoning: Option<&ReasoningConfig>,
-        tools: Option<&[serde_json::Value]>,
-        tool_choice: Option<&serde_json::Value>,
-        sender: Option<&mpsc::Sender<Result<ResponseEvent, CoreError>>>,
+        request: ProviderGenerateStreamRequest<'_>,
     ) -> Result<ProviderOutcome, CoreError> {
-        let _ = request_id;
-        let _ = sender;
-        self.generate(model, input, reasoning, tools, tool_choice).await
+        let _ = request.request_id;
+        let _ = request.sender;
+        self.generate(request.request).await
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ProviderGenerateRequest<'a> {
+    pub model: &'a str,
+    pub input: &'a ResponsesInput,
+    pub reasoning: Option<&'a ReasoningConfig>,
+    pub tools: Option<&'a [serde_json::Value]>,
+    pub tool_choice: Option<&'a serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ProviderGenerateStreamRequest<'a> {
+    pub request_id: &'a str,
+    pub request: ProviderGenerateRequest<'a>,
+    pub sender: Option<&'a mpsc::Sender<Result<ResponseEvent, CoreError>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -428,15 +434,17 @@ impl StageHandler for GenerateHandler {
         let provider_started_at = Instant::now();
         let result = match self
             .provider
-            .generate_stream(
-                &context.request_id,
-                &context.model,
-                &context.request_input,
-                context.request_reasoning.as_ref(),
-                context.request_tools.as_deref(),
-                context.request_tool_choice.as_ref(),
-                self.sender.as_ref(),
-            )
+            .generate_stream(ProviderGenerateStreamRequest {
+                request_id: &context.request_id,
+                request: ProviderGenerateRequest {
+                    model: &context.model,
+                    input: &context.request_input,
+                    reasoning: context.request_reasoning.as_ref(),
+                    tools: context.request_tools.as_deref(),
+                    tool_choice: context.request_tool_choice.as_ref(),
+                },
+                sender: self.sender.as_ref(),
+            })
             .await
         {
             Ok(result) => result,
@@ -990,13 +998,9 @@ mod tests {
     impl ProviderClient for FakeProvider {
         async fn generate(
             &self,
-            _model: &str,
-            input: &ResponsesInput,
-            _reasoning: Option<&ReasoningConfig>,
-            _tools: Option<&[serde_json::Value]>,
-            _tool_choice: Option<&serde_json::Value>,
+            request: ProviderGenerateRequest<'_>,
         ) -> Result<ProviderOutcome, CoreError> {
-            let input_text = input.to_canonical_text();
+            let input_text = request.input.to_canonical_text();
             match self.behavior {
                 ProviderBehavior::Success => {
                     let chunks = vec!["hello ".to_string(), input_text];

@@ -8,10 +8,12 @@ use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::Mutex;
-use tokio::sync::mpsc;
 use uuid::Uuid;
-use xrouter_contracts::{ReasoningConfig, ResponseEvent, ResponsesInput};
-use xrouter_core::{CoreError, ProviderClient, ProviderOutcome};
+use xrouter_contracts::ResponsesInput;
+use xrouter_core::{
+    CoreError, ProviderClient, ProviderGenerateRequest, ProviderGenerateStreamRequest,
+    ProviderOutcome,
+};
 
 use crate::{HttpRuntime, base_chat_payload};
 
@@ -84,15 +86,11 @@ impl GigachatClient {
 impl ProviderClient for GigachatClient {
     async fn generate(
         &self,
-        model: &str,
-        input: &ResponsesInput,
-        _reasoning: Option<&ReasoningConfig>,
-        _tools: Option<&[Value]>,
-        _tool_choice: Option<&Value>,
+        request: ProviderGenerateRequest<'_>,
     ) -> Result<ProviderOutcome, CoreError> {
         let access_token = self.access_token().await?;
         let url = self.runtime.build_url("chat/completions")?;
-        let payload = build_gigachat_payload(model, input);
+        let payload = build_gigachat_payload(request.model, request.input);
         self.runtime
             .post_chat_completions_stream(
                 "request",
@@ -107,25 +105,19 @@ impl ProviderClient for GigachatClient {
 
     async fn generate_stream(
         &self,
-        request_id: &str,
-        model: &str,
-        input: &ResponsesInput,
-        _reasoning: Option<&ReasoningConfig>,
-        _tools: Option<&[Value]>,
-        _tool_choice: Option<&Value>,
-        sender: Option<&mpsc::Sender<Result<ResponseEvent, CoreError>>>,
+        request: ProviderGenerateStreamRequest<'_>,
     ) -> Result<ProviderOutcome, CoreError> {
         let access_token = self.access_token().await?;
         let url = self.runtime.build_url("chat/completions")?;
-        let payload = build_gigachat_payload(model, input);
+        let payload = build_gigachat_payload(request.request.model, request.request.input);
         self.runtime
             .post_chat_completions_stream(
-                request_id,
+                request.request_id,
                 &url,
                 &payload,
                 Some(access_token.as_str()),
                 &[],
-                sender,
+                request.sender,
             )
             .await
     }

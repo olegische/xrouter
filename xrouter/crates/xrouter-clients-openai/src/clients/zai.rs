@@ -3,10 +3,12 @@ use reqwest::Client;
 use serde_json::Map;
 use serde_json::Value;
 use serde_json::json;
-use tokio::sync::mpsc;
 use tracing::{debug, info};
-use xrouter_contracts::{ReasoningConfig, ResponseEvent, ResponsesInput};
-use xrouter_core::{CoreError, ProviderClient, ProviderOutcome};
+use xrouter_contracts::{ReasoningConfig, ResponsesInput};
+use xrouter_core::{
+    CoreError, ProviderClient, ProviderGenerateRequest, ProviderGenerateStreamRequest,
+    ProviderOutcome,
+};
 
 use crate::{HttpRuntime, base_chat_payload};
 
@@ -37,19 +39,20 @@ impl ZaiClient {
 impl ProviderClient for ZaiClient {
     async fn generate(
         &self,
-        model: &str,
-        input: &ResponsesInput,
-        reasoning: Option<&ReasoningConfig>,
-        tools: Option<&[Value]>,
-        tool_choice: Option<&Value>,
+        request: ProviderGenerateRequest<'_>,
     ) -> Result<ProviderOutcome, CoreError> {
         let url = self.runtime.build_url("chat/completions")?;
-        let (payload, normalization) =
-            build_zai_payload(model, input, reasoning, tools, tool_choice);
+        let (payload, normalization) = build_zai_payload(
+            request.model,
+            request.input,
+            request.reasoning,
+            request.tools,
+            request.tool_choice,
+        );
         info!(
             event = "provider.request.payload.normalized",
             provider = "zai",
-            model = model,
+            model = request.model,
             tools_in = normalization.tools_in,
             tools_out = normalization.tools_out,
             tools_dropped = normalization.tools_dropped,
@@ -60,7 +63,7 @@ impl ProviderClient for ZaiClient {
             debug!(
                 event = "provider.request.payload.normalized.details",
                 provider = "zai",
-                model = model,
+                model = request.model,
                 dropped_tool_types = ?normalization.dropped_tool_types
             );
         }
@@ -69,21 +72,20 @@ impl ProviderClient for ZaiClient {
 
     async fn generate_stream(
         &self,
-        request_id: &str,
-        model: &str,
-        input: &ResponsesInput,
-        reasoning: Option<&ReasoningConfig>,
-        tools: Option<&[Value]>,
-        tool_choice: Option<&Value>,
-        sender: Option<&mpsc::Sender<Result<ResponseEvent, CoreError>>>,
+        request: ProviderGenerateStreamRequest<'_>,
     ) -> Result<ProviderOutcome, CoreError> {
         let url = self.runtime.build_url("chat/completions")?;
-        let (payload, normalization) =
-            build_zai_payload(model, input, reasoning, tools, tool_choice);
+        let (payload, normalization) = build_zai_payload(
+            request.request.model,
+            request.request.input,
+            request.request.reasoning,
+            request.request.tools,
+            request.request.tool_choice,
+        );
         info!(
             event = "provider.request.payload.normalized",
             provider = "zai",
-            model = model,
+            model = request.request.model,
             tools_in = normalization.tools_in,
             tools_out = normalization.tools_out,
             tools_dropped = normalization.tools_dropped,
@@ -94,12 +96,19 @@ impl ProviderClient for ZaiClient {
             debug!(
                 event = "provider.request.payload.normalized.details",
                 provider = "zai",
-                model = model,
+                model = request.request.model,
                 dropped_tool_types = ?normalization.dropped_tool_types
             );
         }
         self.runtime
-            .post_chat_completions_stream(request_id, &url, &payload, None, &[], sender)
+            .post_chat_completions_stream(
+                request.request_id,
+                &url,
+                &payload,
+                None,
+                &[],
+                request.sender,
+            )
             .await
     }
 }
