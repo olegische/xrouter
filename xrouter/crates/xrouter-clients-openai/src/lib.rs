@@ -184,10 +184,11 @@ impl OpenAiCompatibleClient {
         client: &Client,
         model: &str,
         input: &str,
-        reasoning: Option<&ReasoningConfig>,
+        _reasoning: Option<&ReasoningConfig>,
     ) -> Result<ProviderOutcome, CoreError> {
         let url = format!("{}/responses", base_url.trim_end_matches('/'));
-        let payload = build_responses_request_payload(model, input, reasoning);
+        let upstream_model = build_yandex_upstream_model(model, self.project.as_deref())?;
+        let payload = build_responses_request_payload(&upstream_model, input, None);
         let request = self.build_http_request(client, &url, &payload);
         let response = request
             .send()
@@ -314,6 +315,18 @@ fn build_responses_request_payload(
         payload.insert("reasoning".to_string(), reasoning_cfg);
     }
     Value::Object(payload)
+}
+
+fn build_yandex_upstream_model(model: &str, project: Option<&str>) -> Result<String, CoreError> {
+    if model.starts_with("gpt://") {
+        return Ok(model.to_string());
+    }
+
+    let project = project.map(str::trim).filter(|value| !value.is_empty()).ok_or_else(|| {
+        CoreError::Provider("provider project is not configured for yandex".to_string())
+    })?;
+
+    Ok(format!("gpt://{project}/{model}"))
 }
 
 fn normalize_openai_reasoning(reasoning: Option<&ReasoningConfig>) -> Option<Value> {
@@ -560,6 +573,33 @@ mod tests {
         assert_eq!(
             extract_reasoning_from_details(&details),
             Some("Summary\nDetailed chain".to_string())
+        );
+    }
+
+    #[test]
+    fn yandex_upstream_model_adds_gpt_prefix() {
+        let model = build_yandex_upstream_model("aliceai-llm/latest", Some("folder-123"))
+            .expect("model should build");
+        assert_eq!(model, "gpt://folder-123/aliceai-llm/latest");
+    }
+
+    #[test]
+    fn yandex_upstream_model_keeps_prefixed_model() {
+        let model = build_yandex_upstream_model(
+            "gpt://folder-123/yandexgpt-lite/latest",
+            Some("folder-123"),
+        )
+        .expect("model should pass through");
+        assert_eq!(model, "gpt://folder-123/yandexgpt-lite/latest");
+    }
+
+    #[test]
+    fn yandex_upstream_model_requires_project() {
+        let error = build_yandex_upstream_model("aliceai-llm/latest", None)
+            .expect_err("missing project should fail");
+        assert_eq!(
+            error.to_string(),
+            "provider error: provider project is not configured for yandex"
         );
     }
 }

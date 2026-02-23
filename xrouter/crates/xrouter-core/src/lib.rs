@@ -177,9 +177,7 @@ pub fn default_model_catalog() -> Vec<ModelDescriptor> {
         ModelDescriptor {
             id: "yandexgpt/latest".to_string(),
             provider: "yandex".to_string(),
-            description:
-                "YandexGPT Pro 5 (latest branch) for advanced instruction following and complex generation tasks."
-                    .to_string(),
+            description: "YandexGPT Pro 5 (latest branch): general-purpose Yandex model for complex generation tasks such as RAG, document analysis, reporting, and structured information extraction.".to_string(),
             context_length: 32768,
             tokenizer: "unknown".to_string(),
             instruct_type: "none".to_string(),
@@ -191,9 +189,7 @@ pub fn default_model_catalog() -> Vec<ModelDescriptor> {
         ModelDescriptor {
             id: "yandexgpt/rc".to_string(),
             provider: "yandex".to_string(),
-            description:
-                "YandexGPT Pro 5.1 (release candidate branch) for testing newest model behavior before latest rollout."
-                    .to_string(),
+            description: "YandexGPT Pro 5.1 (RC branch): release-candidate branch with improved function calling and structured output support before rollout to latest.".to_string(),
             context_length: 32768,
             tokenizer: "unknown".to_string(),
             instruct_type: "none".to_string(),
@@ -205,9 +201,7 @@ pub fn default_model_catalog() -> Vec<ModelDescriptor> {
         ModelDescriptor {
             id: "yandexgpt-lite/latest".to_string(),
             provider: "yandex".to_string(),
-            description:
-                "YandexGPT Lite 5 (latest branch) optimized for lower-latency, lower-cost text generation."
-                    .to_string(),
+            description: "YandexGPT Lite 5 (latest branch): smallest and fastest Yandex text model, optimized for low-latency tasks like classification, formatting, and summarization.".to_string(),
             context_length: 32768,
             tokenizer: "unknown".to_string(),
             instruct_type: "none".to_string(),
@@ -219,9 +213,7 @@ pub fn default_model_catalog() -> Vec<ModelDescriptor> {
         ModelDescriptor {
             id: "aliceai-llm/latest".to_string(),
             provider: "yandex".to_string(),
-            description:
-                "Alice AI LLM (latest branch) conversational model in Yandex AI Studio with OpenAI-compatible access."
-                    .to_string(),
+            description: "Alice AI LLM (latest branch): Yandex flagship conversational model, strong on complex tasks and noticeably better for multi-turn chat and assistant scenarios.".to_string(),
             context_length: 32768,
             tokenizer: "unknown".to_string(),
             instruct_type: "none".to_string(),
