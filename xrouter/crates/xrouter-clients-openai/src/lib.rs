@@ -241,15 +241,15 @@ impl HttpRuntime {
                     }
                     all_chunks.push(delta);
                 }
-                if let Some(reasoning_delta) = extract_chat_reasoning_delta(&frame, request_id)? {
-                    if let Some(tx) = sender {
-                        let _ = tx
-                            .send(Ok(ResponseEvent::ReasoningDelta {
-                                id: request_id.to_string(),
-                                delta: reasoning_delta,
-                            }))
-                            .await;
-                    }
+                if let Some(reasoning_delta) = extract_chat_reasoning_delta(&frame, request_id)?
+                    && let Some(tx) = sender
+                {
+                    let _ = tx
+                        .send(Ok(ResponseEvent::ReasoningDelta {
+                            id: request_id.to_string(),
+                            delta: reasoning_delta,
+                        }))
+                        .await;
                 }
             }
         }
@@ -277,15 +277,15 @@ impl HttpRuntime {
                 }
                 all_chunks.push(delta);
             }
-            if let Some(reasoning_delta) = extract_chat_reasoning_delta(&frame, request_id)? {
-                if let Some(tx) = sender {
-                    let _ = tx
-                        .send(Ok(ResponseEvent::ReasoningDelta {
-                            id: request_id.to_string(),
-                            delta: reasoning_delta,
-                        }))
-                        .await;
-                }
+            if let Some(reasoning_delta) = extract_chat_reasoning_delta(&frame, request_id)?
+                && let Some(tx) = sender
+            {
+                let _ = tx
+                    .send(Ok(ResponseEvent::ReasoningDelta {
+                        id: request_id.to_string(),
+                        delta: reasoning_delta,
+                    }))
+                    .await;
             }
         }
         let mut outcome = match map_chat_completion_stream_text(&full_body) {
@@ -341,6 +341,7 @@ impl HttpRuntime {
         let mut all_chunks = Vec::<String>::new();
         let mut parse_buffer = String::new();
         let mut full_body = String::new();
+        let is_yandex_provider = self.provider_id == "yandex";
         let mut stream = response.bytes_stream();
         let mut transport_chunk_index = 0usize;
         let mut delta_count = 0usize;
@@ -377,7 +378,9 @@ impl HttpRuntime {
                             delta_preview = %truncate_for_debug(&delta, STREAM_DEBUG_PREVIEW_LIMIT)
                         );
                     }
-                    if let Some(tx) = sender {
+                    if let Some(tx) = sender
+                        && !is_yandex_provider
+                    {
                         let _ = tx
                             .send(Ok(ResponseEvent::OutputTextDelta {
                                 id: request_id.to_string(),
@@ -403,7 +406,9 @@ impl HttpRuntime {
                         delta_preview = %truncate_for_debug(&delta, STREAM_DEBUG_PREVIEW_LIMIT)
                     );
                 }
-                if let Some(tx) = sender {
+                if let Some(tx) = sender
+                    && !is_yandex_provider
+                {
                     let _ = tx
                         .send(Ok(ResponseEvent::OutputTextDelta {
                             id: request_id.to_string(),
@@ -414,7 +419,11 @@ impl HttpRuntime {
                 all_chunks.push(delta);
             }
         }
-        let mut outcome = match map_responses_stream_text(&full_body) {
+        let mut outcome = match if self.provider_id == "yandex" {
+            crate::clients::yandex::map_yandex_responses_stream_text(&full_body)
+        } else {
+            map_responses_stream_text(&full_body)
+        } {
             Ok(parsed) => parsed,
             Err(error) => {
                 if all_chunks.is_empty() {
@@ -434,7 +443,7 @@ impl HttpRuntime {
                 }
             }
         };
-        if !all_chunks.is_empty() {
+        if !all_chunks.is_empty() && !is_yandex_provider {
             outcome.chunks = all_chunks;
         }
         outcome.emitted_live = sender.is_some();
@@ -691,7 +700,10 @@ fn map_responses_api_response(payload: ResponsesApiResponse) -> Result<ProviderO
     let content = extract_message_text_from_responses_output(&payload.output).unwrap_or_default();
     let tool_calls = extract_tool_calls_from_responses_output(&payload.output);
     if content.is_empty() && tool_calls.is_none() {
-        return Err(CoreError::Provider("provider returned empty message content".to_string()));
+        warn!(
+            event = "provider.responses.empty_message_content",
+            "provider returned empty message content for responses payload; treating as empty completed response"
+        );
     }
 
     let reasoning_details = extract_reasoning_content_items_from_responses_output(&payload.output);
@@ -806,7 +818,10 @@ fn map_chat_completion_stream_text(payload: &str) -> Result<ProviderOutcome, Cor
     });
 
     if all_content.is_empty() && tool_calls.is_none() {
-        return Err(CoreError::Provider("provider returned empty message content".to_string()));
+        warn!(
+            event = "provider.responses.stream.empty_message_content",
+            "provider returned empty message content in responses stream; treating as empty completed response"
+        );
     }
 
     let final_chunks = if all_content.is_empty() { Vec::new() } else { chunks };
@@ -860,7 +875,7 @@ fn map_responses_stream_text(payload: &str) -> Result<ProviderOutcome, CoreError
             continue;
         }
 
-        if parsed.kind == "response.completed"
+        if ((parsed.kind == "response.completed") || parsed.kind.is_empty())
             && let Some(response) = parsed.response
         {
             let mut mapped = map_responses_api_response(response)?;
@@ -879,7 +894,10 @@ fn map_responses_stream_text(payload: &str) -> Result<ProviderOutcome, CoreError
         if all_content.is_empty() { 0 } else { all_content.split_whitespace().count() as u32 };
 
     if all_content.is_empty() && tool_calls.is_none() {
-        return Err(CoreError::Provider("provider returned empty message content".to_string()));
+        warn!(
+            event = "provider.responses.stream.empty_message_content.tail",
+            "provider returned empty message content in responses stream tail; treating as empty completed response"
+        );
     }
 
     Ok(ProviderOutcome {
@@ -1246,19 +1264,22 @@ fn extract_reasoning_from_details(details: &[Value]) -> Option<String> {
 }
 
 fn extract_message_text_from_responses_output(output: &[ResponsesApiOutputItem]) -> Option<String> {
-    output.iter().find_map(|item| {
-        if item.kind != "message" {
-            return None;
-        }
-        let text = item
-            .content
-            .as_ref()?
-            .iter()
-            .find_map(|part| part.get("text").and_then(Value::as_str))?
-            .trim()
-            .to_string();
-        if text.is_empty() { None } else { Some(text) }
-    })
+    let text = output
+        .iter()
+        .filter(|item| item.kind == "message")
+        .filter_map(|item| item.content.as_ref())
+        .flat_map(|parts| parts.iter())
+        .filter_map(|part| {
+            part.get("text")
+                .and_then(Value::as_str)
+                .or_else(|| part.get("output_text").and_then(Value::as_str))
+                .or_else(|| part.get("input_text").and_then(Value::as_str))
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>()
+        .join("");
+    if text.is_empty() { None } else { Some(text) }
 }
 
 fn extract_reasoning_text_from_responses_output(
@@ -1536,6 +1557,18 @@ mod tests {
     }
 
     #[test]
+    fn responses_sse_without_type_but_with_response_object_is_not_empty() {
+        let sse = concat!(
+            "data: {\"response\":{\"id\":\"resp_1\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}],\"usage\":{\"output_tokens\":1}}}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let outcome =
+            map_responses_stream_text(sse).expect("responses fallback payload must parse");
+        assert_eq!(outcome.chunks.join(""), "ok");
+        assert_eq!(outcome.output_tokens, 1);
+    }
+
+    #[test]
     fn chat_sse_without_trailing_separator_is_not_empty() {
         let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"index\":0,\"finish_reason\":null}]}";
         let outcome = map_chat_completion_stream_text(sse).expect("SSE tail frame must parse");
@@ -1547,6 +1580,40 @@ mod tests {
         let sse = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}";
         let outcome = map_responses_stream_text(sse).expect("SSE tail frame must parse");
         assert_eq!(outcome.chunks.join(""), "ok");
+    }
+
+    #[test]
+    fn responses_sse_with_empty_completed_payload_is_fail_soft() {
+        let sse = concat!(
+            "event: response.completed\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"output\":[],\"usage\":{\"output_tokens\":0}}}\n\n"
+        );
+        let outcome = map_responses_stream_text(sse)
+            .expect("empty completed responses payload must not fail");
+        assert!(outcome.chunks.is_empty());
+        assert_eq!(outcome.output_tokens, 0);
+        assert!(outcome.tool_calls.is_none());
+    }
+
+    #[test]
+    fn responses_message_text_skips_empty_parts_and_joins_non_empty() {
+        let payload = ResponsesApiResponse {
+            output: vec![ResponsesApiOutputItem {
+                kind: "message".to_string(),
+                content: Some(vec![
+                    json!({"type":"output_text","text":""}),
+                    json!({"type":"output_text","text":"hello"}),
+                    json!({"type":"output_text","text":" world"}),
+                ]),
+                summary: None,
+                call_id: None,
+                name: None,
+                arguments: None,
+            }],
+            usage: Some(ResponsesApiUsage { output_tokens: 2 }),
+        };
+        let outcome = map_responses_api_response(payload).expect("message text must be extracted");
+        assert_eq!(outcome.chunks.join(""), "helloworld");
     }
 
     #[test]
@@ -1596,7 +1663,8 @@ mod tests {
         let gigachat = crate::clients::gigachat::build_gigachat_payload("GigaChat-Pro", &input);
         assert_eq!(gigachat["stream"], Value::Bool(true));
 
-        let yandex = crate::clients::yandex::build_yandex_responses_payload("gpt://p/m", &input);
+        let (yandex, _) =
+            crate::clients::yandex::build_yandex_responses_payload("gpt://p/m", &input, None, None);
         assert_eq!(yandex["stream"], Value::Bool(true));
 
         let (deepseek, _) = build_deepseek_payload("deepseek-chat", &input, None, None, None);
