@@ -44,6 +44,8 @@ pub const DEFAULT_OPENROUTER_SUPPORTED_MODELS: &[&str] = &[
     "z-ai/glm-4.7-flash",
     "z-ai/glm-5",
 ];
+pub const DEFAULT_GIGACHAT_SUPPORTED_MODELS: &[&str] =
+    &["gigachat/GigaChat-2", "gigachat/GigaChat-2-Max", "gigachat/GigaChat-2-Pro"];
 
 #[derive(Debug, Clone)]
 pub struct ProviderConfig {
@@ -61,7 +63,9 @@ pub struct AppConfig {
     pub openai_compatible_api: bool,
     pub provider_timeout_seconds: u64,
     pub provider_max_inflight: usize,
+    pub gigachat_insecure_tls: bool,
     pub openrouter_supported_models: Vec<String>,
+    pub gigachat_supported_models: Vec<String>,
     pub providers: HashMap<String, ProviderConfig>,
 }
 
@@ -105,10 +109,14 @@ impl AppConfig {
             env::var("XR_PROVIDER_MAX_INFLIGHT").unwrap_or_else(|_| "100".to_string());
         let provider_max_inflight = parse_positive_usize(&provider_max_inflight_raw)
             .ok_or(ConfigError::InvalidProviderMaxInflight(provider_max_inflight_raw))?;
+        let gigachat_insecure_tls =
+            env::var("GIGACHAT_INSECURE_TLS").ok().and_then(|v| parse_bool(&v)).unwrap_or(false);
         let openrouter_supported_models = parse_string_list_env(
             "OPENROUTER_SUPPORTED_MODELS",
             DEFAULT_OPENROUTER_SUPPORTED_MODELS,
         );
+        let gigachat_supported_models =
+            parse_string_list_env("GIGACHAT_SUPPORTED_MODELS", DEFAULT_GIGACHAT_SUPPORTED_MODELS);
 
         let providers = [
             provider_from_env("openrouter", "OPENROUTER"),
@@ -129,7 +137,9 @@ impl AppConfig {
             openai_compatible_api,
             provider_timeout_seconds,
             provider_max_inflight,
+            gigachat_insecure_tls,
             openrouter_supported_models,
+            gigachat_supported_models,
             providers,
         })
     }
@@ -142,7 +152,12 @@ impl AppConfig {
             openai_compatible_api: false,
             provider_timeout_seconds: 15,
             provider_max_inflight: 100,
+            gigachat_insecure_tls: false,
             openrouter_supported_models: DEFAULT_OPENROUTER_SUPPORTED_MODELS
+                .iter()
+                .map(|model| (*model).to_string())
+                .collect(),
+            gigachat_supported_models: DEFAULT_GIGACHAT_SUPPORTED_MODELS
                 .iter()
                 .map(|model| (*model).to_string())
                 .collect(),

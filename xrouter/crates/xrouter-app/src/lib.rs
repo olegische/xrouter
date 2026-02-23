@@ -16,11 +16,16 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tracing::{debug, error, info, warn};
+use ureq::rustls::{
+    self,
+    client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
+    pki_types::{CertificateDer, ServerName, UnixTime},
+};
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 use xrouter_clients_openai::{
     DeepSeekClient, GigachatClient, MockProviderClient, OpenAiClient, OpenRouterClient,
-    YandexResponsesClient, ZaiClient, build_http_client,
+    YandexResponsesClient, ZaiClient, build_http_client, build_http_client_insecure_tls,
 };
 #[cfg(feature = "billing")]
 use xrouter_clients_usage::InMemoryUsageClient;
@@ -210,6 +215,79 @@ struct ProviderModelEntry {
     id: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct GigachatOauthResponse {
+    #[serde(alias = "tok")]
+    access_token: String,
+}
+
+const GIGACHAT_OAUTH_URL: &str = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth";
+const GIGACHAT_SCOPE: &str = "GIGACHAT_API_PERS";
+
+#[derive(Debug)]
+struct AcceptAllCerts;
+
+impl ServerCertVerifier for AcceptAllCerts {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        vec![
+            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+            rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
+            rustls::SignatureScheme::ECDSA_NISTP521_SHA512,
+            rustls::SignatureScheme::ED25519,
+            rustls::SignatureScheme::ED448,
+            rustls::SignatureScheme::RSA_PSS_SHA256,
+            rustls::SignatureScheme::RSA_PSS_SHA384,
+            rustls::SignatureScheme::RSA_PSS_SHA512,
+            rustls::SignatureScheme::RSA_PKCS1_SHA256,
+            rustls::SignatureScheme::RSA_PKCS1_SHA384,
+            rustls::SignatureScheme::RSA_PKCS1_SHA512,
+        ]
+    }
+}
+
+fn gigachat_ureq_agent(connect_timeout_seconds: u64, insecure_tls: bool) -> ureq::Agent {
+    let builder =
+        ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(connect_timeout_seconds));
+    if insecure_tls {
+        let tls_config = rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(AcceptAllCerts))
+            .with_no_client_auth();
+        builder.tls_config(Arc::new(tls_config)).build()
+    } else {
+        builder.build()
+    }
+}
+
 fn default_modality() -> String {
     "text->text".to_string()
 }
@@ -343,7 +421,16 @@ fn fetch_provider_model_ids(
     provider_name: &str,
     provider_config: &config::ProviderConfig,
     connect_timeout_seconds: u64,
+    gigachat_insecure_tls: bool,
 ) -> Option<Vec<String>> {
+    if provider_name == "gigachat" {
+        return fetch_gigachat_model_ids(
+            provider_config,
+            connect_timeout_seconds,
+            gigachat_insecure_tls,
+        );
+    }
+
     let base_url = provider_config
         .base_url
         .as_deref()
@@ -392,6 +479,100 @@ fn fetch_provider_model_ids(
             warn!(
                 event = "provider.models.fetch.failed",
                 provider = %provider_name,
+                reason = "request_failed",
+                error = %err
+            );
+            None
+        }
+    }
+}
+
+fn fetch_gigachat_access_token(
+    provider_config: &config::ProviderConfig,
+    connect_timeout_seconds: u64,
+    insecure_tls: bool,
+) -> Option<String> {
+    let api_key = provider_config.api_key.as_deref().filter(|v| !v.trim().is_empty())?;
+    let agent = gigachat_ureq_agent(connect_timeout_seconds, insecure_tls);
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let response = agent
+        .post(GIGACHAT_OAUTH_URL)
+        .set("Accept", "application/json")
+        .set("Authorization", &format!("Bearer {api_key}"))
+        .set("RqUID", &request_id)
+        .set("Content-Type", "application/x-www-form-urlencoded")
+        .send_form(&[("scope", GIGACHAT_SCOPE)]);
+
+    match response {
+        Ok(ok) => match ok.into_json::<GigachatOauthResponse>() {
+            Ok(payload) => Some(payload.access_token),
+            Err(err) => {
+                warn!(
+                    event = "provider.oauth.fetch.failed",
+                    provider = "gigachat",
+                    reason = "invalid_json",
+                    error = %err
+                );
+                None
+            }
+        },
+        Err(err) => {
+            warn!(
+                event = "provider.oauth.fetch.failed",
+                provider = "gigachat",
+                reason = "request_failed",
+                error = %err
+            );
+            None
+        }
+    }
+}
+
+fn fetch_gigachat_model_ids(
+    provider_config: &config::ProviderConfig,
+    connect_timeout_seconds: u64,
+    insecure_tls: bool,
+) -> Option<Vec<String>> {
+    let base_url = provider_config
+        .base_url
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())?
+        .trim_end_matches('/')
+        .to_string();
+    let access_token =
+        fetch_gigachat_access_token(provider_config, connect_timeout_seconds, insecure_tls)?;
+    let agent = gigachat_ureq_agent(connect_timeout_seconds, insecure_tls);
+    let url = format!("{base_url}/models");
+    let response = agent
+        .get(url.as_str())
+        .set("Accept", "application/json")
+        .set("Authorization", &format!("Bearer {access_token}"))
+        .call();
+
+    match response {
+        Ok(ok) => match ok.into_json::<ProviderModelsResponse>() {
+            Ok(payload) => Some(
+                payload
+                    .data
+                    .into_iter()
+                    .map(|entry| entry.id)
+                    .filter(|id| !id.trim().is_empty())
+                    .collect(),
+            ),
+            Err(err) => {
+                warn!(
+                    event = "provider.models.fetch.failed",
+                    provider = "gigachat",
+                    reason = "invalid_json",
+                    error = %err
+                );
+                None
+            }
+        },
+        Err(err) => {
+            warn!(
+                event = "provider.models.fetch.failed",
+                provider = "gigachat",
                 reason = "request_failed",
                 error = %err
             );
@@ -563,7 +744,11 @@ impl AppState {
                         provider_config.base_url.clone(),
                         provider_config.api_key.clone(),
                         None,
-                        shared_http_client.clone(),
+                        if config.gigachat_insecure_tls {
+                            build_http_client_insecure_tls(config.provider_timeout_seconds)
+                        } else {
+                            shared_http_client.clone()
+                        },
                         Some(config.provider_max_inflight),
                     )),
                     _ => Arc::new(OpenAiClient::new(
@@ -600,6 +785,7 @@ impl AppState {
                     && entry.provider != "openrouter"
                     && entry.provider != "zai"
                     && entry.provider != "yandex"
+                    && entry.provider != "gigachat"
             })
             .collect::<Vec<_>>();
 
@@ -641,9 +827,12 @@ impl AppState {
                         .cloned()
                         .collect::<Vec<_>>(),
                 );
-            } else if let Some(zai_model_ids) =
-                fetch_provider_model_ids("zai", zai_config, config.provider_timeout_seconds)
-            {
+            } else if let Some(zai_model_ids) = fetch_provider_model_ids(
+                "zai",
+                zai_config,
+                config.provider_timeout_seconds,
+                config.gigachat_insecure_tls,
+            ) {
                 let zai_models =
                     build_models_from_registry("zai", &zai_model_ids, &default_catalog);
                 info!(
@@ -675,9 +864,12 @@ impl AppState {
                         .cloned()
                         .collect::<Vec<_>>(),
                 );
-            } else if let Some(yandex_model_ids) =
-                fetch_provider_model_ids("yandex", yandex_config, config.provider_timeout_seconds)
-            {
+            } else if let Some(yandex_model_ids) = fetch_provider_model_ids(
+                "yandex",
+                yandex_config,
+                config.provider_timeout_seconds,
+                config.gigachat_insecure_tls,
+            ) {
                 let yandex_models =
                     build_models_from_registry("yandex", &yandex_model_ids, &default_catalog);
                 info!(
@@ -694,6 +886,50 @@ impl AppState {
                         .filter(|model| model.provider == "yandex")
                         .cloned()
                         .collect::<Vec<_>>(),
+                );
+            }
+        }
+
+        if enabled_providers.contains("gigachat")
+            && let Some(gigachat_config) = config.providers.get("gigachat")
+        {
+            if cfg!(test) {
+                models.extend(
+                    default_catalog
+                        .iter()
+                        .filter(|model| model.provider == "gigachat")
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                );
+            } else if let Some(gigachat_model_ids) = fetch_provider_model_ids(
+                "gigachat",
+                gigachat_config,
+                config.provider_timeout_seconds,
+                config.gigachat_insecure_tls,
+            ) {
+                let supported = config
+                    .gigachat_supported_models
+                    .iter()
+                    .map(|id| id.strip_prefix("gigachat/").unwrap_or(id.as_str()))
+                    .collect::<HashSet<_>>();
+                let filtered_ids = gigachat_model_ids
+                    .into_iter()
+                    .filter(|id| supported.contains(id.as_str()))
+                    .collect::<Vec<_>>();
+                let gigachat_models =
+                    build_models_from_registry("gigachat", &filtered_ids, &default_catalog);
+                info!(
+                    event = "gigachat.models.loaded",
+                    source = "remote",
+                    model_count = gigachat_models.len(),
+                    configured_count = config.gigachat_supported_models.len()
+                );
+                models.extend(gigachat_models);
+            } else {
+                warn!(
+                    event = "gigachat.models.loaded",
+                    source = "none",
+                    reason = "fetch_failed_no_fallback"
                 );
             }
         }
@@ -1700,7 +1936,7 @@ path=/api/v1/models
 "#,
                 r#"
 status=200
-json.data_len=51
+json.data_len=53
 json.first_id=<id>
 "#,
             ),
@@ -1786,7 +2022,7 @@ path=/v1/models
 "#,
                 r#"
 status=200
-json.data_len=51
+json.data_len=53
 json.first_id=<id>
 "#,
             ),

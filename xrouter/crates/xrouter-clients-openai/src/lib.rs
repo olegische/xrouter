@@ -20,6 +20,14 @@ pub fn build_http_client(timeout_seconds: u64) -> Option<Client> {
     Client::builder().timeout(Duration::from_secs(timeout_seconds)).build().ok()
 }
 
+pub fn build_http_client_insecure_tls(timeout_seconds: u64) -> Option<Client> {
+    Client::builder()
+        .timeout(Duration::from_secs(timeout_seconds))
+        .danger_accept_invalid_certs(true)
+        .build()
+        .ok()
+}
+
 #[derive(Clone)]
 struct HttpRuntime {
     provider_id: String,
