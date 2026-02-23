@@ -186,6 +186,14 @@ impl HttpRuntime {
             .is_some_and(|value| value.contains("application/json"));
 
         if is_json {
+            if self.provider_id == "gigachat" {
+                let payload = response.json::<Value>().await.map_err(|err| {
+                    CoreError::Provider(format!("provider response parse failed: {err}"))
+                })?;
+                return crate::clients::gigachat::map_gigachat_chat_completion_response_value(
+                    &payload,
+                );
+            }
             let payload = response.json::<ChatCompletionsResponse>().await.map_err(|err| {
                 CoreError::Provider(format!("provider response parse failed: {err}"))
             })?;
@@ -288,7 +296,11 @@ impl HttpRuntime {
                     .await;
             }
         }
-        let mut outcome = match map_chat_completion_stream_text(&full_body) {
+        let mut outcome = match if self.provider_id == "gigachat" {
+            crate::clients::gigachat::map_gigachat_chat_completion_stream_text(&full_body)
+        } else {
+            map_chat_completion_stream_text(&full_body)
+        } {
             Ok(parsed) => parsed,
             Err(error) => {
                 if all_chunks.is_empty() {
@@ -1660,7 +1672,8 @@ mod tests {
         let (zai, _) = build_zai_payload("glm-5", &input, None, None, None);
         assert_eq!(zai["stream"], Value::Bool(true));
 
-        let gigachat = crate::clients::gigachat::build_gigachat_payload("GigaChat-Pro", &input);
+        let (gigachat, _) =
+            crate::clients::gigachat::build_gigachat_payload("GigaChat-Pro", &input, None, None);
         assert_eq!(gigachat["stream"], Value::Bool(true));
 
         let (yandex, _) =

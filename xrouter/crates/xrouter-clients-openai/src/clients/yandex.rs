@@ -956,9 +956,7 @@ mod tests {
 
     #[test]
     fn yandex_extracts_text_when_output_uses_value_field() {
-        let sse = concat!(
-            "data: {\"response\":{\"id\":\"resp_1\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"value\":\"ok\"}]}],\"status\":\"completed\"}}\n\n"
-        );
+        let sse = "data: {\"response\":{\"id\":\"resp_1\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"value\":\"ok\"}]}],\"status\":\"completed\"}}\n\n";
         let outcome = map_yandex_responses_stream_text(sse)
             .expect("responses SSE with value field must parse");
         assert_eq!(outcome.chunks.join(""), "ok");
@@ -966,9 +964,7 @@ mod tests {
 
     #[test]
     fn yandex_legacy_tool_call_content_maps_to_function_call_item() {
-        let sse = concat!(
-            "data: {\"response\":{\"id\":\"resp_1\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"exec_command\\n{\\\"cmd\\\":\\\"ls -la\\\"}\"}]}],\"status\":\"completed\"}}\n\n"
-        );
+        let sse = "data: {\"response\":{\"id\":\"resp_1\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"exec_command\\n{\\\"cmd\\\":\\\"ls -la\\\"}\"}]}],\"status\":\"completed\"}}\n\n";
         let outcome =
             map_yandex_responses_stream_text(sse).expect("legacy tool-call content must parse");
         let calls = outcome.tool_calls.expect("legacy tool call must map");
@@ -980,9 +976,7 @@ mod tests {
 
     #[test]
     fn yandex_fenced_tool_call_content_maps_to_function_call_item() {
-        let sse = concat!(
-            "data: {\"response\":{\"id\":\"resp_1\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"Ниже вызов\\n```exec_command\\n{\\\"cmd\\\":\\\"pwd\\\"}\\n```\"}]}],\"status\":\"completed\"}}\n\n"
-        );
+        let sse = "data: {\"response\":{\"id\":\"resp_1\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"Ниже вызов\\n```exec_command\\n{\\\"cmd\\\":\\\"pwd\\\"}\\n```\"}]}],\"status\":\"completed\"}}\n\n";
         let outcome =
             map_yandex_responses_stream_text(sse).expect("fenced tool-call content must parse");
         let calls = outcome.tool_calls.expect("fenced legacy tool call must map");
