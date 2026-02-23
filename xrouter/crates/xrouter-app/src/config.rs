@@ -58,6 +58,8 @@ pub struct AppConfig {
     pub port: u16,
     pub billing_enabled: bool,
     pub openai_compatible_api: bool,
+    pub provider_timeout_seconds: u64,
+    pub provider_max_inflight: usize,
     pub openrouter_supported_models: Vec<String>,
     pub providers: HashMap<String, ProviderConfig>,
 }
@@ -70,6 +72,10 @@ pub enum ConfigError {
     InvalidBool(String),
     #[error("invalid ENABLE_OPENAI_COMPATIBLE_API value: {0}")]
     InvalidOpenAiCompatibleApiBool(String),
+    #[error("invalid XR_PROVIDER_TIMEOUT value: {0}")]
+    InvalidProviderConnectTimeout(String),
+    #[error("invalid XR_PROVIDER_MAX_INFLIGHT value: {0}")]
+    InvalidProviderMaxInflight(String),
 }
 
 impl AppConfig {
@@ -89,6 +95,15 @@ impl AppConfig {
         let openai_compatible_api = parse_bool(&openai_compatible_raw).ok_or_else(|| {
             ConfigError::InvalidOpenAiCompatibleApiBool(openai_compatible_raw.clone())
         })?;
+        let provider_timeout_raw =
+            env::var("XR_PROVIDER_TIMEOUT").unwrap_or_else(|_| "15".to_string());
+        let provider_timeout_seconds = provider_timeout_raw.parse::<u64>().map_err(|_| {
+            ConfigError::InvalidProviderConnectTimeout(provider_timeout_raw.clone())
+        })?;
+        let provider_max_inflight_raw =
+            env::var("XR_PROVIDER_MAX_INFLIGHT").unwrap_or_else(|_| "100".to_string());
+        let provider_max_inflight = parse_positive_usize(&provider_max_inflight_raw)
+            .ok_or(ConfigError::InvalidProviderMaxInflight(provider_max_inflight_raw))?;
         let openrouter_supported_models = parse_string_list_env(
             "OPENROUTER_SUPPORTED_MODELS",
             DEFAULT_OPENROUTER_SUPPORTED_MODELS,
@@ -111,6 +126,8 @@ impl AppConfig {
             port,
             billing_enabled,
             openai_compatible_api,
+            provider_timeout_seconds,
+            provider_max_inflight,
             openrouter_supported_models,
             providers,
         })
@@ -122,6 +139,8 @@ impl AppConfig {
             port: 3000,
             billing_enabled: false,
             openai_compatible_api: false,
+            provider_timeout_seconds: 15,
+            provider_max_inflight: 100,
             openrouter_supported_models: DEFAULT_OPENROUTER_SUPPORTED_MODELS
                 .iter()
                 .map(|model| (*model).to_string())
@@ -170,9 +189,21 @@ fn provider_from_env(name: &str, prefix: &str) -> (String, ProviderConfig) {
     let base_url_var = format!("{prefix}_BASE_URL");
 
     let api_key = env::var(api_key_var).ok().filter(|v| !v.trim().is_empty());
-    let base_url = env::var(base_url_var).ok().filter(|v| !v.trim().is_empty());
+    let base_url = env::var(base_url_var)
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| default_provider_base_url(name).map(ToString::to_string));
 
     (name.to_string(), ProviderConfig { enabled, api_key, base_url })
+}
+
+fn default_provider_base_url(provider: &str) -> Option<&'static str> {
+    match provider {
+        "deepseek" => Some("https://api.deepseek.com"),
+        "openrouter" => Some("https://openrouter.ai/api/v1"),
+        "zai" => Some("https://api.z.ai/api/paas/v4"),
+        _ => None,
+    }
 }
 
 fn parse_bool(value: &str) -> Option<bool> {
@@ -181,6 +212,11 @@ fn parse_bool(value: &str) -> Option<bool> {
         "0" | "false" | "no" | "off" => Some(false),
         _ => None,
     }
+}
+
+fn parse_positive_usize(value: &str) -> Option<usize> {
+    let parsed = value.trim().parse::<usize>().ok()?;
+    if parsed == 0 { None } else { Some(parsed) }
 }
 
 fn parse_string_list_env(var_name: &str, default: &[&str]) -> Vec<String> {
@@ -216,7 +252,7 @@ fn parse_string_list(trimmed: &str, default: &[&str]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_OPENROUTER_SUPPORTED_MODELS, parse_string_list};
+    use super::{DEFAULT_OPENROUTER_SUPPORTED_MODELS, parse_positive_usize, parse_string_list};
 
     #[test]
     fn parse_string_list_accepts_json_array() {
@@ -229,5 +265,17 @@ mod tests {
         let parsed = parse_string_list("[not-json]", DEFAULT_OPENROUTER_SUPPORTED_MODELS);
         assert_eq!(parsed.len(), DEFAULT_OPENROUTER_SUPPORTED_MODELS.len());
         assert_eq!(parsed.first().map(String::as_str), Some("anthropic/claude-haiku-4.5"));
+    }
+
+    #[test]
+    fn parse_positive_usize_accepts_positive_values() {
+        assert_eq!(parse_positive_usize("100"), Some(100));
+        assert_eq!(parse_positive_usize(" 7 "), Some(7));
+    }
+
+    #[test]
+    fn parse_positive_usize_rejects_zero_and_invalid() {
+        assert_eq!(parse_positive_usize("0"), None);
+        assert_eq!(parse_positive_usize("abc"), None);
     }
 }

@@ -6,4 +6,8 @@ license.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
 xrouter-core = { path = "../xrouter-core" }

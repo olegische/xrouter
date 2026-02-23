@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     convert::Infallible,
     sync::Arc,
+    time::Duration,
     time::Instant,
 };
 
@@ -194,6 +195,17 @@ struct OpenRouterTopProvider {
     is_moderated: Option<bool>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ProviderModelsResponse {
+    #[serde(default)]
+    data: Vec<ProviderModelEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProviderModelEntry {
+    id: String,
+}
+
 fn default_modality() -> String {
     "text->text".to_string()
 }
@@ -207,6 +219,7 @@ impl Default for OpenRouterArchitecture {
 fn fetch_openrouter_models(
     provider_config: &config::ProviderConfig,
     supported_ids: &[String],
+    connect_timeout_seconds: u64,
 ) -> Option<Vec<ModelDescriptor>> {
     let base_url = provider_config
         .base_url
@@ -220,7 +233,10 @@ fn fetch_openrouter_models(
     }
 
     let url = format!("{base_url}/models");
-    let mut request = ureq::get(url.as_str()).set("Accept", "application/json");
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(connect_timeout_seconds))
+        .build();
+    let mut request = agent.get(url.as_str()).set("Accept", "application/json");
     if let Some(api_key) = provider_config.api_key.as_deref() {
         request = request.set("Authorization", &format!("Bearer {api_key}"));
     }
@@ -319,6 +335,144 @@ fn fallback_openrouter_models(model_ids: &[String]) -> Vec<ModelDescriptor> {
         .collect()
 }
 
+fn fetch_provider_model_ids(
+    provider_name: &str,
+    provider_config: &config::ProviderConfig,
+    connect_timeout_seconds: u64,
+) -> Option<Vec<String>> {
+    let base_url = provider_config
+        .base_url
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())?
+        .trim_end_matches('/')
+        .to_string();
+    if base_url.is_empty() {
+        return None;
+    }
+
+    let url = format!("{base_url}/models");
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(connect_timeout_seconds))
+        .build();
+    let mut request = agent.get(url.as_str()).set("Accept", "application/json");
+    if let Some(api_key) = provider_config.api_key.as_deref().filter(|v| !v.trim().is_empty()) {
+        request = request.set("Authorization", &format!("Bearer {api_key}"));
+    }
+
+    match request.call() {
+        Ok(ok) => match ok.into_json::<ProviderModelsResponse>() {
+            Ok(payload) => Some(
+                payload
+                    .data
+                    .into_iter()
+                    .map(|entry| entry.id)
+                    .filter(|id| !id.trim().is_empty())
+                    .collect(),
+            ),
+            Err(err) => {
+                warn!(
+                    event = "provider.models.fetch.failed",
+                    provider = %provider_name,
+                    reason = "invalid_json",
+                    error = %err
+                );
+                None
+            }
+        },
+        Err(err) => {
+            warn!(
+                event = "provider.models.fetch.failed",
+                provider = %provider_name,
+                reason = "request_failed",
+                error = %err
+            );
+            None
+        }
+    }
+}
+
+fn build_models_from_registry(
+    provider: &str,
+    provider_model_ids: &[String],
+    registry_seed: &[ModelDescriptor],
+) -> Vec<ModelDescriptor> {
+    let registry = registry_seed
+        .iter()
+        .filter(|model| model.provider == provider)
+        .map(|model| (model.id.clone(), model.clone()))
+        .collect::<HashMap<_, _>>();
+
+    provider_model_ids
+        .iter()
+        .map(|id| {
+            if let Some(template) = registry.get(id) {
+                let mut model = template.clone();
+                model.id = id.clone();
+                model
+            } else if provider == "zai" {
+                zai_fallback_model_descriptor(id)
+            } else {
+                ModelDescriptor {
+                    id: id.clone(),
+                    provider: provider.to_string(),
+                    description: format!("{id} via {provider}"),
+                    context_length: 128_000,
+                    tokenizer: "unknown".to_string(),
+                    instruct_type: "none".to_string(),
+                    modality: "text->text".to_string(),
+                    top_provider_context_length: 128_000,
+                    is_moderated: true,
+                    max_completion_tokens: 8_192,
+                }
+            }
+        })
+        .collect()
+}
+
+fn zai_fallback_model_descriptor(id: &str) -> ModelDescriptor {
+    let (context_length, max_completion_tokens, description) = match id {
+        "glm-4.5" => (
+            128_000,
+            98_304,
+            "GLM-4.5 is Z.AI's flagship general model focused on strong coding, reasoning, and long-context agent workflows.".to_string(),
+        ),
+        "glm-4.5-air" => (
+            128_000,
+            98_304,
+            "GLM-4.5-Air is a lighter GLM-4.5 variant aimed at lower-latency interactive and agent tasks.".to_string(),
+        ),
+        "glm-4.6" => (
+            200_000,
+            128_000,
+            "GLM-4.6 extends GLM with larger context and output budgets for long-horizon reasoning and implementation tasks.".to_string(),
+        ),
+        "glm-4.7" => (
+            200_000,
+            128_000,
+            "GLM-4.7 improves stability for multi-step execution, coding, and structured planning over prior GLM generations.".to_string(),
+        ),
+        "glm-5" => (
+            200_000,
+            128_000,
+            "GLM-5 is Z.AI's latest high-capacity model for complex systems design, agent orchestration, and long-context coding work.".to_string(),
+        ),
+        _ => (128_000, 8_192, format!("{id} via zai")),
+    };
+
+    ModelDescriptor {
+        id: id.to_string(),
+        provider: "zai".to_string(),
+        description,
+        context_length,
+        tokenizer: "unknown".to_string(),
+        instruct_type: "none".to_string(),
+        modality: "text->text".to_string(),
+        top_provider_context_length: context_length,
+        is_moderated: true,
+        max_completion_tokens,
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     openai_compatible_api: bool,
@@ -344,11 +498,26 @@ impl AppState {
         debug!(event = "app.config.providers", enabled_providers = ?enabled_providers);
 
         let mut engines = HashMap::new();
+        let shared_http_client = if cfg!(test) {
+            None
+        } else {
+            OpenAiCompatibleClient::build_http_client(config.provider_timeout_seconds)
+        };
         for (provider, provider_config) in &config.providers {
             if !provider_config.enabled {
                 continue;
             }
-            let client = Arc::new(OpenAiCompatibleClient::new(provider.to_string()));
+            let client = if cfg!(test) {
+                Arc::new(OpenAiCompatibleClient::mock(provider.to_string()))
+            } else {
+                Arc::new(OpenAiCompatibleClient::new_with_http_client(
+                    provider.to_string(),
+                    provider_config.base_url.clone(),
+                    provider_config.api_key.clone(),
+                    shared_http_client.clone(),
+                    Some(config.provider_max_inflight),
+                ))
+            };
             #[cfg(feature = "billing")]
             let engine = Arc::new(ExecutionEngine::new(
                 client,
@@ -365,10 +534,14 @@ impl AppState {
             providers = ?engines.keys().collect::<Vec<_>>()
         );
 
-        let mut models = default_model_catalog()
+        let default_catalog = default_model_catalog();
+        let mut models = default_catalog
+            .clone()
             .into_iter()
             .filter(|entry| {
-                enabled_providers.contains(&entry.provider) && entry.provider != "openrouter"
+                enabled_providers.contains(&entry.provider)
+                    && entry.provider != "openrouter"
+                    && entry.provider != "zai"
             })
             .collect::<Vec<_>>();
 
@@ -377,9 +550,11 @@ impl AppState {
         {
             if cfg!(test) {
                 models.extend(fallback_openrouter_models(&config.openrouter_supported_models));
-            } else if let Some(fetched) =
-                fetch_openrouter_models(openrouter_config, &config.openrouter_supported_models)
-            {
+            } else if let Some(fetched) = fetch_openrouter_models(
+                openrouter_config,
+                &config.openrouter_supported_models,
+                config.provider_timeout_seconds,
+            ) {
                 info!(
                     event = "openrouter.models.loaded",
                     source = "remote",
@@ -394,6 +569,40 @@ impl AppState {
                     model_count = config.openrouter_supported_models.len()
                 );
                 models.extend(fallback_openrouter_models(&config.openrouter_supported_models));
+            }
+        }
+
+        if enabled_providers.contains("zai")
+            && let Some(zai_config) = config.providers.get("zai")
+        {
+            if cfg!(test) {
+                models.extend(
+                    default_catalog
+                        .iter()
+                        .filter(|model| model.provider == "zai")
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                );
+            } else if let Some(zai_model_ids) =
+                fetch_provider_model_ids("zai", zai_config, config.provider_timeout_seconds)
+            {
+                let zai_models =
+                    build_models_from_registry("zai", &zai_model_ids, &default_catalog);
+                info!(
+                    event = "zai.models.loaded",
+                    source = "remote",
+                    model_count = zai_models.len()
+                );
+                models.extend(zai_models);
+            } else {
+                warn!(event = "zai.models.loaded", source = "fallback", reason = "fetch_failed");
+                models.extend(
+                    default_catalog
+                        .iter()
+                        .filter(|model| model.provider == "zai")
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                );
             }
         }
         info!(event = "models.registry.loaded", model_count = models.len());
@@ -1018,6 +1227,12 @@ async fn run_responses_request(
 }
 
 fn error_response(err: CoreError) -> Response {
+    let status = match &err {
+        CoreError::Provider(message) if is_provider_overloaded(message) => {
+            axum::http::StatusCode::TOO_MANY_REQUESTS
+        }
+        _ => axum::http::StatusCode::BAD_REQUEST,
+    };
     match &err {
         CoreError::Validation(_) | CoreError::Provider(_) => {
             warn!(event = "http.error_response", error = %err);
@@ -1026,8 +1241,11 @@ fn error_response(err: CoreError) -> Response {
             error!(event = "http.error_response", error = %err);
         }
     }
-    (axum::http::StatusCode::BAD_REQUEST, Json(ErrorResponse { error: err.to_string() }))
-        .into_response()
+    (status, Json(ErrorResponse { error: err.to_string() })).into_response()
+}
+
+fn is_provider_overloaded(message: &str) -> bool {
+    message.starts_with("provider overloaded:")
 }
 
 fn ensure_id_prefix(id: &str, prefix: &str) -> String {
@@ -1170,8 +1388,24 @@ mod tests {
             api_key: None,
             base_url: Some("http://127.0.0.1:0".to_string()),
         };
-        let models = fetch_openrouter_models(&provider, &["openai/gpt-5.2".to_string()]);
+        let models = fetch_openrouter_models(&provider, &["openai/gpt-5.2".to_string()], 1);
         assert!(models.is_none());
+    }
+
+    #[test]
+    fn build_models_from_registry_uses_seed_and_fallback_for_unknown_ids() {
+        let seed = default_model_catalog();
+        let ids = vec!["glm-4.5".to_string(), "glm-4.6".to_string(), "glm-5".to_string()];
+        let models = build_models_from_registry("zai", &ids, &seed);
+        assert_eq!(models.len(), 3);
+        assert_eq!(models[0].id, "glm-4.5");
+        assert_eq!(models[0].provider, "zai");
+        assert_eq!(models[1].id, "glm-4.6");
+        assert_eq!(models[1].provider, "zai");
+        assert_eq!(models[1].max_completion_tokens, 128_000);
+        assert_eq!(models[1].context_length, 200_000);
+        assert_eq!(models[2].id, "glm-5");
+        assert_eq!(models[2].max_completion_tokens, 128_000);
     }
 
     fn assert_snapshot(name: &str, actual: &str, expected: &str) {
@@ -1811,5 +2045,20 @@ json.first_id=<none>
             .and_then(Value::as_str)
             .unwrap_or("");
         assert!(!reasoning.is_empty(), "expected reasoning in chat message for reasoner model");
+    }
+
+    #[test]
+    fn error_response_returns_429_for_provider_overload() {
+        let response = error_response(CoreError::Provider(
+            "provider overloaded: max in-flight limit reached for deepseek".to_string(),
+        ));
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[test]
+    fn error_response_keeps_400_for_regular_provider_error() {
+        let response =
+            error_response(CoreError::Provider("provider request failed: timeout".to_string()));
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }

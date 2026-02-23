@@ -15,7 +15,8 @@ async fn main() {
         host = %config.host,
         port = config.port,
         billing_enabled = config.billing_enabled,
-        openai_compatible_api = config.openai_compatible_api
+        openai_compatible_api = config.openai_compatible_api,
+        provider_max_inflight = config.provider_max_inflight
     );
     let state = AppState::from_config(&config);
     let app = build_router(state);
