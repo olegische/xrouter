@@ -50,6 +50,7 @@ pub struct ProviderConfig {
     pub enabled: bool,
     pub api_key: Option<String>,
     pub base_url: Option<String>,
+    pub project: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -148,31 +149,31 @@ impl AppConfig {
             providers: [
                 (
                     "openrouter".to_string(),
-                    ProviderConfig { enabled: true, api_key: None, base_url: None },
+                    ProviderConfig { enabled: true, api_key: None, base_url: None, project: None },
                 ),
                 (
                     "deepseek".to_string(),
-                    ProviderConfig { enabled: true, api_key: None, base_url: None },
+                    ProviderConfig { enabled: true, api_key: None, base_url: None, project: None },
                 ),
                 (
                     "gigachat".to_string(),
-                    ProviderConfig { enabled: true, api_key: None, base_url: None },
+                    ProviderConfig { enabled: true, api_key: None, base_url: None, project: None },
                 ),
                 (
                     "yandex".to_string(),
-                    ProviderConfig { enabled: true, api_key: None, base_url: None },
+                    ProviderConfig { enabled: true, api_key: None, base_url: None, project: None },
                 ),
                 (
                     "ollama".to_string(),
-                    ProviderConfig { enabled: true, api_key: None, base_url: None },
+                    ProviderConfig { enabled: true, api_key: None, base_url: None, project: None },
                 ),
                 (
                     "zai".to_string(),
-                    ProviderConfig { enabled: true, api_key: None, base_url: None },
+                    ProviderConfig { enabled: true, api_key: None, base_url: None, project: None },
                 ),
                 (
                     "xrouter".to_string(),
-                    ProviderConfig { enabled: true, api_key: None, base_url: None },
+                    ProviderConfig { enabled: true, api_key: None, base_url: None, project: None },
                 ),
             ]
             .into_iter()
@@ -187,14 +188,23 @@ fn provider_from_env(name: &str, prefix: &str) -> (String, ProviderConfig) {
 
     let api_key_var = format!("{prefix}_API_KEY");
     let base_url_var = format!("{prefix}_BASE_URL");
+    let project_var = format!("{prefix}_PROJECT");
 
     let api_key = env::var(api_key_var).ok().filter(|v| !v.trim().is_empty());
     let base_url = env::var(base_url_var)
         .ok()
         .filter(|v| !v.trim().is_empty())
         .or_else(|| default_provider_base_url(name).map(ToString::to_string));
+    let project = if name == "yandex" {
+        env::var("YANDEX_FOLDER_ID")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .or_else(|| env::var(project_var).ok().filter(|v| !v.trim().is_empty()))
+    } else {
+        env::var(project_var).ok().filter(|v| !v.trim().is_empty())
+    };
 
-    (name.to_string(), ProviderConfig { enabled, api_key, base_url })
+    (name.to_string(), ProviderConfig { enabled, api_key, base_url, project })
 }
 
 fn default_provider_base_url(provider: &str) -> Option<&'static str> {
@@ -202,6 +212,7 @@ fn default_provider_base_url(provider: &str) -> Option<&'static str> {
         "deepseek" => Some("https://api.deepseek.com"),
         "openrouter" => Some("https://openrouter.ai/api/v1"),
         "zai" => Some("https://api.z.ai/api/paas/v4"),
+        "yandex" => Some("https://ai.api.cloud.yandex.net/v1"),
         _ => None,
     }
 }

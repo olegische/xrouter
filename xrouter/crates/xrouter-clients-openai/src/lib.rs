@@ -18,6 +18,7 @@ pub struct OpenAiCompatibleClient {
     provider_id: String,
     base_url: Option<String>,
     api_key: Option<String>,
+    project: Option<String>,
     http_client: Option<Client>,
     max_inflight: Option<Arc<Semaphore>>,
     mode: ClientMode,
@@ -32,22 +33,39 @@ impl OpenAiCompatibleClient {
         provider_id: String,
         base_url: Option<String>,
         api_key: Option<String>,
+        project: Option<String>,
         http_client: Option<Client>,
         max_inflight: Option<usize>,
     ) -> Self {
         let max_inflight = max_inflight.map(Semaphore::new).map(Arc::new);
-        Self { provider_id, base_url, api_key, http_client, max_inflight, mode: ClientMode::Real }
+        Self {
+            provider_id,
+            base_url,
+            api_key,
+            project,
+            http_client,
+            max_inflight,
+            mode: ClientMode::Real,
+        }
     }
 
     pub fn new(
         provider_id: String,
         base_url: Option<String>,
         api_key: Option<String>,
+        project: Option<String>,
         timeout_seconds: u64,
         max_inflight: Option<usize>,
     ) -> Self {
         let http_client = Self::build_http_client(timeout_seconds);
-        Self::new_with_http_client(provider_id, base_url, api_key, http_client, max_inflight)
+        Self::new_with_http_client(
+            provider_id,
+            base_url,
+            api_key,
+            project,
+            http_client,
+            max_inflight,
+        )
     }
 
     pub fn mock(provider_id: String) -> Self {
@@ -55,6 +73,7 @@ impl OpenAiCompatibleClient {
             provider_id,
             base_url: None,
             api_key: None,
+            project: None,
             http_client: None,
             max_inflight: None,
             mode: ClientMode::Mock,
@@ -110,14 +129,15 @@ impl OpenAiCompatibleClient {
             .as_ref()
             .ok_or_else(|| CoreError::Provider("provider client init failed".to_string()))?;
 
+        if self.provider_id == "yandex" {
+            return self
+                .remote_generate_yandex_responses(base_url, client, model, input, reasoning)
+                .await;
+        }
+
         let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
         let payload = build_request_payload(&self.provider_id, model, input, reasoning);
-        let mut request =
-            client.post(url).header("Content-Type", "application/json").json(&payload);
-
-        if let Some(api_key) = self.api_key.as_deref().filter(|v| !v.trim().is_empty()) {
-            request = request.bearer_auth(api_key);
-        }
+        let request = self.build_http_request(client, &url, &payload);
 
         let response = request
             .send()
@@ -156,6 +176,67 @@ impl OpenAiCompatibleClient {
             });
 
         Ok(ProviderOutcome { chunks, output_tokens, reasoning, reasoning_details })
+    }
+
+    async fn remote_generate_yandex_responses(
+        &self,
+        base_url: &str,
+        client: &Client,
+        model: &str,
+        input: &str,
+        reasoning: Option<&ReasoningConfig>,
+    ) -> Result<ProviderOutcome, CoreError> {
+        let url = format!("{}/responses", base_url.trim_end_matches('/'));
+        let payload = build_responses_request_payload(model, input, reasoning);
+        let request = self.build_http_request(client, &url, &payload);
+        let response = request
+            .send()
+            .await
+            .map_err(|err| CoreError::Provider(format!("provider request failed: {err}")))?;
+        let response = response
+            .error_for_status()
+            .map_err(|err| CoreError::Provider(format!("provider returned error status: {err}")))?;
+        let payload = response
+            .json::<ResponsesApiResponse>()
+            .await
+            .map_err(|err| CoreError::Provider(format!("provider response parse failed: {err}")))?;
+        let content =
+            extract_message_text_from_responses_output(&payload.output).ok_or_else(|| {
+                CoreError::Provider("provider returned empty message content".to_string())
+            })?;
+        let reasoning_details =
+            extract_reasoning_content_items_from_responses_output(&payload.output);
+        let reasoning =
+            extract_reasoning_text_from_responses_output(&payload.output).or_else(|| {
+                reasoning_details
+                    .as_ref()
+                    .and_then(|details| extract_reasoning_from_details(details))
+            });
+        let output_tokens = payload
+            .usage
+            .as_ref()
+            .map(|u| u.output_tokens)
+            .unwrap_or_else(|| content.split_whitespace().count() as u32);
+
+        Ok(ProviderOutcome { chunks: vec![content], output_tokens, reasoning, reasoning_details })
+    }
+
+    fn build_http_request(
+        &self,
+        client: &Client,
+        url: &str,
+        payload: &Value,
+    ) -> reqwest::RequestBuilder {
+        let mut request = client.post(url).header("Content-Type", "application/json").json(payload);
+        if let Some(api_key) = self.api_key.as_deref().filter(|v| !v.trim().is_empty()) {
+            request = request.bearer_auth(api_key);
+        }
+        if self.provider_id == "yandex"
+            && let Some(project) = self.project.as_deref().filter(|v| !v.trim().is_empty())
+        {
+            request = request.header("OpenAI-Project", project);
+        }
+        request
     }
 }
 
@@ -201,6 +282,15 @@ fn build_request_payload(
                 payload.insert("thinking".to_string(), json!({ "type": "enabled" }));
             }
         }
+        "zai" => {
+            if let Some(effort) = reasoning.and_then(|cfg| cfg.effort.as_deref()).map(str::trim)
+                && !effort.is_empty()
+            {
+                let thinking_type =
+                    if effort.eq_ignore_ascii_case("none") { "disabled" } else { "enabled" };
+                payload.insert("thinking".to_string(), json!({ "type": thinking_type }));
+            }
+        }
         _ => {
             if let Some(reasoning_cfg) = normalize_openai_reasoning(reasoning) {
                 payload.insert("reasoning".to_string(), reasoning_cfg);
@@ -208,6 +298,21 @@ fn build_request_payload(
         }
     }
 
+    Value::Object(payload)
+}
+
+fn build_responses_request_payload(
+    model: &str,
+    input: &str,
+    reasoning: Option<&ReasoningConfig>,
+) -> Value {
+    let mut payload = Map::new();
+    payload.insert("model".to_string(), Value::String(model.to_string()));
+    payload.insert("input".to_string(), Value::String(input.to_string()));
+    payload.insert("stream".to_string(), Value::Bool(false));
+    if let Some(reasoning_cfg) = normalize_openai_reasoning(reasoning) {
+        payload.insert("reasoning".to_string(), reasoning_cfg);
+    }
     Value::Object(payload)
 }
 
@@ -250,6 +355,36 @@ struct Usage {
     completion_tokens: Option<u32>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ResponsesApiResponse {
+    #[serde(default)]
+    output: Vec<ResponsesApiOutputItem>,
+    #[serde(default)]
+    usage: Option<ResponsesApiUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResponsesApiUsage {
+    #[serde(default)]
+    output_tokens: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResponsesApiOutputItem {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    content: Option<Vec<Value>>,
+    #[serde(default)]
+    summary: Option<Vec<ResponsesApiSummary>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResponsesApiSummary {
+    #[serde(default)]
+    text: String,
+}
+
 fn extract_message_content(content: &serde_json::Value) -> Option<String> {
     match content {
         serde_json::Value::String(text) if !text.is_empty() => Some(text.clone()),
@@ -282,6 +417,53 @@ fn extract_reasoning_from_details(details: &[serde_json::Value]) -> Option<Strin
         .join("\n");
 
     if text.is_empty() { None } else { Some(text) }
+}
+
+fn extract_message_text_from_responses_output(output: &[ResponsesApiOutputItem]) -> Option<String> {
+    output.iter().find_map(|item| {
+        if item.kind != "message" {
+            return None;
+        }
+        let text = item
+            .content
+            .as_ref()?
+            .iter()
+            .find_map(|part| part.get("text").and_then(Value::as_str))?
+            .trim()
+            .to_string();
+        if text.is_empty() { None } else { Some(text) }
+    })
+}
+
+fn extract_reasoning_text_from_responses_output(
+    output: &[ResponsesApiOutputItem],
+) -> Option<String> {
+    output.iter().find_map(|item| {
+        if item.kind != "reasoning" {
+            return None;
+        }
+        let summary = item
+            .summary
+            .as_ref()
+            .and_then(|values| values.first())
+            .map(|v| v.text.trim().to_string())
+            .filter(|v| !v.is_empty());
+        if summary.is_some() {
+            return summary;
+        }
+        item.content.as_ref().and_then(|details| extract_reasoning_from_details(details))
+    })
+}
+
+fn extract_reasoning_content_items_from_responses_output(
+    output: &[ResponsesApiOutputItem],
+) -> Option<Vec<Value>> {
+    output.iter().find_map(|item| {
+        if item.kind != "reasoning" {
+            return None;
+        }
+        item.content.clone().filter(|items| !items.is_empty())
+    })
 }
 
 #[cfg(test)]
@@ -336,6 +518,22 @@ mod tests {
             Some(&reasoning("xhigh")),
         );
         assert_eq!(payload["reasoning"]["effort"], "high");
+    }
+
+    #[test]
+    fn zai_enables_thinking_when_effort_present() {
+        let payload =
+            build_request_payload("zai", "glm-5", "Reply with ok", Some(&reasoning("high")));
+        assert_eq!(payload["thinking"]["type"], "enabled");
+        assert!(payload.get("reasoning").is_none());
+    }
+
+    #[test]
+    fn zai_disables_thinking_when_effort_none() {
+        let payload =
+            build_request_payload("zai", "glm-5", "Reply with ok", Some(&reasoning("none")));
+        assert_eq!(payload["thinking"]["type"], "disabled");
+        assert!(payload.get("reasoning").is_none());
     }
 
     #[test]

@@ -1,7 +1,7 @@
 # xrouter Rust Architecture
 
-This document describes stable architecture constraints for the Rust workspace in
-`/Users/olegromanchuk/Projects/xrouter/xrouter`.
+This document describes stable architecture constraints for the Rust workspace
+root (`xrouter/`).
 
 The goal is explicit: migrate behavior from legacy Python into a typed Rust router
 while keeping lifecycle semantics aligned with `formal/xrouter.tla`.

@@ -175,9 +175,53 @@ pub fn default_model_catalog() -> Vec<ModelDescriptor> {
             max_completion_tokens: 8192,
         },
         ModelDescriptor {
-            id: "yandexgpt-32k".to_string(),
+            id: "yandexgpt/latest".to_string(),
             provider: "yandex".to_string(),
-            description: "YandexGPT 32K".to_string(),
+            description:
+                "YandexGPT Pro 5 (latest branch) for advanced instruction following and complex generation tasks."
+                    .to_string(),
+            context_length: 32768,
+            tokenizer: "unknown".to_string(),
+            instruct_type: "none".to_string(),
+            modality: "text->text".to_string(),
+            top_provider_context_length: 32768,
+            is_moderated: true,
+            max_completion_tokens: 8192,
+        },
+        ModelDescriptor {
+            id: "yandexgpt/rc".to_string(),
+            provider: "yandex".to_string(),
+            description:
+                "YandexGPT Pro 5.1 (release candidate branch) for testing newest model behavior before latest rollout."
+                    .to_string(),
+            context_length: 32768,
+            tokenizer: "unknown".to_string(),
+            instruct_type: "none".to_string(),
+            modality: "text->text".to_string(),
+            top_provider_context_length: 32768,
+            is_moderated: true,
+            max_completion_tokens: 8192,
+        },
+        ModelDescriptor {
+            id: "yandexgpt-lite/latest".to_string(),
+            provider: "yandex".to_string(),
+            description:
+                "YandexGPT Lite 5 (latest branch) optimized for lower-latency, lower-cost text generation."
+                    .to_string(),
+            context_length: 32768,
+            tokenizer: "unknown".to_string(),
+            instruct_type: "none".to_string(),
+            modality: "text->text".to_string(),
+            top_provider_context_length: 32768,
+            is_moderated: true,
+            max_completion_tokens: 8192,
+        },
+        ModelDescriptor {
+            id: "aliceai-llm/latest".to_string(),
+            provider: "yandex".to_string(),
+            description:
+                "Alice AI LLM (latest branch) conversational model in Yandex AI Studio with OpenAI-compatible access."
+                    .to_string(),
             context_length: 32768,
             tokenizer: "unknown".to_string(),
             instruct_type: "none".to_string(),

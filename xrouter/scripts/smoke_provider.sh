@@ -29,7 +29,7 @@ case "$provider" in
   deepseek) model="deepseek/deepseek-chat" ;;
   deepseek-reasoner) model="deepseek/deepseek-reasoner" ;;
   gigachat) model="gigachat/GigaChat-2-Max" ;;
-  yandex) model="yandex/yandexgpt-32k" ;;
+  yandex) model="yandex/yandexgpt/rc" ;;
   ollama) model="ollama/llama3.1:8b" ;;
   zai) model="zai/glm-4.5" ;;
   xrouter) model="xrouter/gpt-4.1-mini" ;;

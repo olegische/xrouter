@@ -33,7 +33,7 @@ case "$provider" in
     ;;
   deepseek) expected_model="deepseek/deepseek-chat" ;;
   gigachat) expected_model="gigachat/GigaChat-2-Max" ;;
-  yandex) expected_model="yandex/yandexgpt-32k" ;;
+  yandex) expected_model="yandex/yandexgpt/rc" ;;
   ollama) expected_model="ollama/llama3.1:8b" ;;
   zai) expected_model="zai/glm-4.5" ;;
   xrouter) expected_model="xrouter/gpt-4.1-mini" ;;

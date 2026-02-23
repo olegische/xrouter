@@ -358,6 +358,11 @@ fn fetch_provider_model_ids(
     if let Some(api_key) = provider_config.api_key.as_deref().filter(|v| !v.trim().is_empty()) {
         request = request.set("Authorization", &format!("Bearer {api_key}"));
     }
+    if provider_name == "yandex"
+        && let Some(project) = provider_config.project.as_deref().filter(|v| !v.trim().is_empty())
+    {
+        request = request.set("OpenAI-Project", project);
+    }
 
     match request.call() {
         Ok(ok) => match ok.into_json::<ProviderModelsResponse>() {
@@ -411,6 +416,8 @@ fn build_models_from_registry(
                 model
             } else if provider == "zai" {
                 zai_fallback_model_descriptor(id)
+            } else if provider == "yandex" {
+                yandex_fallback_model_descriptor(id)
             } else {
                 ModelDescriptor {
                     id: id.clone(),
@@ -473,6 +480,21 @@ fn zai_fallback_model_descriptor(id: &str) -> ModelDescriptor {
     }
 }
 
+fn yandex_fallback_model_descriptor(id: &str) -> ModelDescriptor {
+    ModelDescriptor {
+        id: id.to_string(),
+        provider: "yandex".to_string(),
+        description: format!("{id} via yandex"),
+        context_length: 32_768,
+        tokenizer: "unknown".to_string(),
+        instruct_type: "none".to_string(),
+        modality: "text->text".to_string(),
+        top_provider_context_length: 32_768,
+        is_moderated: true,
+        max_completion_tokens: 8_192,
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     openai_compatible_api: bool,
@@ -514,6 +536,7 @@ impl AppState {
                     provider.to_string(),
                     provider_config.base_url.clone(),
                     provider_config.api_key.clone(),
+                    provider_config.project.clone(),
                     shared_http_client.clone(),
                     Some(config.provider_max_inflight),
                 ))
@@ -542,6 +565,7 @@ impl AppState {
                 enabled_providers.contains(&entry.provider)
                     && entry.provider != "openrouter"
                     && entry.provider != "zai"
+                    && entry.provider != "yandex"
             })
             .collect::<Vec<_>>();
 
@@ -600,6 +624,40 @@ impl AppState {
                     default_catalog
                         .iter()
                         .filter(|model| model.provider == "zai")
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                );
+            }
+        }
+
+        if enabled_providers.contains("yandex")
+            && let Some(yandex_config) = config.providers.get("yandex")
+        {
+            if cfg!(test) {
+                models.extend(
+                    default_catalog
+                        .iter()
+                        .filter(|model| model.provider == "yandex")
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                );
+            } else if let Some(yandex_model_ids) =
+                fetch_provider_model_ids("yandex", yandex_config, config.provider_timeout_seconds)
+            {
+                let yandex_models =
+                    build_models_from_registry("yandex", &yandex_model_ids, &default_catalog);
+                info!(
+                    event = "yandex.models.loaded",
+                    source = "remote",
+                    model_count = yandex_models.len()
+                );
+                models.extend(yandex_models);
+            } else {
+                warn!(event = "yandex.models.loaded", source = "fallback", reason = "fetch_failed");
+                models.extend(
+                    default_catalog
+                        .iter()
+                        .filter(|model| model.provider == "yandex")
                         .cloned()
                         .collect::<Vec<_>>(),
                 );
@@ -1387,6 +1445,7 @@ mod tests {
             enabled: true,
             api_key: None,
             base_url: Some("http://127.0.0.1:0".to_string()),
+            project: None,
         };
         let models = fetch_openrouter_models(&provider, &["openai/gpt-5.2".to_string()], 1);
         assert!(models.is_none());
@@ -1607,7 +1666,7 @@ path=/api/v1/models
 "#,
                 r#"
 status=200
-json.data_len=48
+json.data_len=51
 json.first_id=<id>
 "#,
             ),
@@ -1693,7 +1752,7 @@ path=/v1/models
 "#,
                 r#"
 status=200
-json.data_len=48
+json.data_len=51
 json.first_id=<id>
 "#,
             ),

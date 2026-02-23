@@ -33,7 +33,7 @@ Example:
 `xrouter-app` automatically loads `.env` from the workspace root via `dotenvy`.
 
 ```bash
-cd /Users/olegromanchuk/Projects/xrouter/xrouter
+cd xrouter
 cp .env.example .env
 just run
 ```
