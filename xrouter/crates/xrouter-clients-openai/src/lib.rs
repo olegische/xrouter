@@ -1,28 +1,33 @@
-use std::{
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use async_trait::async_trait;
+mod clients;
+
+pub use clients::{
+    DeepSeekClient, GigachatClient, MockProviderClient, OpenAiClient, OpenRouterClient,
+    YandexResponsesClient, ZaiClient,
+};
+use futures::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::{Semaphore, mpsc};
+use tracing::debug;
 use uuid::Uuid;
-use xrouter_contracts::ReasoningConfig;
-use xrouter_core::{CoreError, ProviderClient, ProviderOutcome};
+use xrouter_contracts::{
+    ResponseEvent, ResponseInputContent, ResponseInputItem, ResponsesInput, ToolCall, ToolFunction,
+};
+use xrouter_core::{CoreError, ProviderOutcome};
 
-const GIGACHAT_OAUTH_URL: &str = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth";
-const GIGACHAT_DEFAULT_SCOPE: &str = "GIGACHAT_API_PERS";
-const TOKEN_REFRESH_BUFFER_MS: i64 = 60_000;
+const STREAM_DEBUG_SAMPLE_EVERY: usize = 25;
+const STREAM_DEBUG_PREVIEW_LIMIT: usize = 120;
 
 pub fn build_http_client(timeout_seconds: u64) -> Option<Client> {
-    Client::builder().timeout(Duration::from_secs(timeout_seconds)).build().ok()
+    Client::builder().connect_timeout(Duration::from_secs(timeout_seconds)).build().ok()
 }
 
 pub fn build_http_client_insecure_tls(timeout_seconds: u64) -> Option<Client> {
     Client::builder()
-        .timeout(Duration::from_secs(timeout_seconds))
+        .connect_timeout(Duration::from_secs(timeout_seconds))
         .danger_accept_invalid_certs(true)
         .build()
         .ok()
@@ -87,16 +92,15 @@ impl HttpRuntime {
             .transpose()
     }
 
-    async fn post_json<T: DeserializeOwned>(
+    async fn send_post(
         &self,
         url: &str,
         payload: &Value,
         bearer_override: Option<&str>,
         extra_headers: &[(String, String)],
-    ) -> Result<T, CoreError> {
+    ) -> Result<reqwest::Response, CoreError> {
         let _permit = self.acquire_inflight_permit()?;
         let client = self.client()?;
-
         let mut request = client.post(url).header("Content-Type", "application/json").json(payload);
         if let Some(token) = bearer_override.or(self.api_key()) {
             request = request.bearer_auth(token);
@@ -104,18 +108,225 @@ impl HttpRuntime {
         for (name, value) in extra_headers {
             request = request.header(name, value);
         }
-
         let response = request
             .send()
             .await
             .map_err(|err| CoreError::Provider(format!("provider request failed: {err}")))?;
-        let response = response
-            .error_for_status()
-            .map_err(|err| CoreError::Provider(format!("provider returned error status: {err}")))?;
         response
-            .json::<T>()
-            .await
-            .map_err(|err| CoreError::Provider(format!("provider response parse failed: {err}")))
+            .error_for_status()
+            .map_err(|err| CoreError::Provider(format!("provider returned error status: {err}")))
+    }
+
+    async fn post_chat_completions_stream(
+        &self,
+        request_id: &str,
+        url: &str,
+        payload: &Value,
+        bearer_override: Option<&str>,
+        extra_headers: &[(String, String)],
+        sender: Option<&mpsc::Sender<Result<ResponseEvent, CoreError>>>,
+    ) -> Result<ProviderOutcome, CoreError> {
+        let response = self.send_post(url, payload, bearer_override, extra_headers).await?;
+        let is_json = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.contains("application/json"));
+
+        if is_json {
+            let payload = response.json::<ChatCompletionsResponse>().await.map_err(|err| {
+                CoreError::Provider(format!("provider response parse failed: {err}"))
+            })?;
+            return map_chat_completion_response(payload);
+        }
+
+        let mut all_chunks = Vec::<String>::new();
+        let mut parse_buffer = String::new();
+        let mut full_body = String::new();
+        let mut stream = response.bytes_stream();
+        let mut transport_chunk_index = 0usize;
+        let mut delta_count = 0usize;
+        while let Some(next) = stream.next().await {
+            let bytes = next.map_err(|err| {
+                CoreError::Provider(format!("provider stream read failed: {err}"))
+            })?;
+            transport_chunk_index += 1;
+            let chunk = String::from_utf8_lossy(&bytes).replace('\r', "");
+            if should_log_stream_chunk_debug(transport_chunk_index) {
+                debug!(
+                    event = "provider.stream.chunk.received",
+                    provider = %self.provider_id,
+                    request_id = request_id,
+                    stream_kind = "chat_completions",
+                    chunk_index = transport_chunk_index,
+                    chunk_bytes = bytes.len(),
+                    chunk_preview = %truncate_for_debug(&chunk, STREAM_DEBUG_PREVIEW_LIMIT)
+                );
+            }
+            parse_buffer.push_str(&chunk);
+            full_body.push_str(&chunk);
+            for frame in split_sse_frames(&mut parse_buffer) {
+                for delta in extract_chat_delta_chunks(&frame, request_id)? {
+                    delta_count += 1;
+                    if should_log_stream_chunk_debug(delta_count) {
+                        debug!(
+                            event = "provider.stream.delta.received",
+                            provider = %self.provider_id,
+                            request_id = request_id,
+                            stream_kind = "chat_completions",
+                            delta_index = delta_count,
+                            delta_chars = delta.chars().count(),
+                            delta_preview = %truncate_for_debug(&delta, STREAM_DEBUG_PREVIEW_LIMIT)
+                        );
+                    }
+                    if let Some(tx) = sender {
+                        let _ = tx
+                            .send(Ok(ResponseEvent::OutputTextDelta {
+                                id: request_id.to_string(),
+                                delta: delta.clone(),
+                            }))
+                            .await;
+                    }
+                    all_chunks.push(delta);
+                }
+                if let Some(reasoning_delta) = extract_chat_reasoning_delta(&frame, request_id)? {
+                    if let Some(tx) = sender {
+                        let _ = tx
+                            .send(Ok(ResponseEvent::ReasoningDelta {
+                                id: request_id.to_string(),
+                                delta: reasoning_delta,
+                            }))
+                            .await;
+                    }
+                }
+            }
+        }
+        let mut outcome = match map_chat_completion_stream_text(&full_body) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                if all_chunks.is_empty() {
+                    return Err(error);
+                }
+                let output_tokens = all_chunks
+                    .iter()
+                    .map(|chunk| chunk.split_whitespace().count() as u32)
+                    .sum::<u32>();
+                ProviderOutcome {
+                    chunks: all_chunks.clone(),
+                    output_tokens,
+                    reasoning: None,
+                    reasoning_details: None,
+                    tool_calls: None,
+                    emitted_live: false,
+                }
+            }
+        };
+        if !all_chunks.is_empty() {
+            outcome.chunks = all_chunks;
+        }
+        outcome.emitted_live = sender.is_some();
+        Ok(outcome)
+    }
+
+    async fn post_responses_stream(
+        &self,
+        request_id: &str,
+        url: &str,
+        payload: &Value,
+        bearer_override: Option<&str>,
+        extra_headers: &[(String, String)],
+        sender: Option<&mpsc::Sender<Result<ResponseEvent, CoreError>>>,
+    ) -> Result<ProviderOutcome, CoreError> {
+        let response = self.send_post(url, payload, bearer_override, extra_headers).await?;
+        let is_json = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.contains("application/json"));
+
+        if is_json {
+            let payload = response.json::<ResponsesApiResponse>().await.map_err(|err| {
+                CoreError::Provider(format!("provider response parse failed: {err}"))
+            })?;
+            return map_responses_api_response(payload);
+        }
+
+        let mut all_chunks = Vec::<String>::new();
+        let mut parse_buffer = String::new();
+        let mut full_body = String::new();
+        let mut stream = response.bytes_stream();
+        let mut transport_chunk_index = 0usize;
+        let mut delta_count = 0usize;
+        while let Some(next) = stream.next().await {
+            let bytes = next.map_err(|err| {
+                CoreError::Provider(format!("provider stream read failed: {err}"))
+            })?;
+            transport_chunk_index += 1;
+            let chunk = String::from_utf8_lossy(&bytes).replace('\r', "");
+            if should_log_stream_chunk_debug(transport_chunk_index) {
+                debug!(
+                    event = "provider.stream.chunk.received",
+                    provider = %self.provider_id,
+                    request_id = request_id,
+                    stream_kind = "responses",
+                    chunk_index = transport_chunk_index,
+                    chunk_bytes = bytes.len(),
+                    chunk_preview = %truncate_for_debug(&chunk, STREAM_DEBUG_PREVIEW_LIMIT)
+                );
+            }
+            parse_buffer.push_str(&chunk);
+            full_body.push_str(&chunk);
+            for frame in split_sse_frames(&mut parse_buffer) {
+                if let Some(delta) = extract_responses_text_delta(&frame)? {
+                    delta_count += 1;
+                    if should_log_stream_chunk_debug(delta_count) {
+                        debug!(
+                            event = "provider.stream.delta.received",
+                            provider = %self.provider_id,
+                            request_id = request_id,
+                            stream_kind = "responses",
+                            delta_index = delta_count,
+                            delta_chars = delta.chars().count(),
+                            delta_preview = %truncate_for_debug(&delta, STREAM_DEBUG_PREVIEW_LIMIT)
+                        );
+                    }
+                    if let Some(tx) = sender {
+                        let _ = tx
+                            .send(Ok(ResponseEvent::OutputTextDelta {
+                                id: request_id.to_string(),
+                                delta: delta.clone(),
+                            }))
+                            .await;
+                    }
+                    all_chunks.push(delta);
+                }
+            }
+        }
+        let mut outcome = match map_responses_stream_text(&full_body) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                if all_chunks.is_empty() {
+                    return Err(error);
+                }
+                let output_tokens = all_chunks
+                    .iter()
+                    .map(|chunk| chunk.split_whitespace().count() as u32)
+                    .sum::<u32>();
+                ProviderOutcome {
+                    chunks: all_chunks.clone(),
+                    output_tokens,
+                    reasoning: None,
+                    reasoning_details: None,
+                    tool_calls: None,
+                    emitted_live: false,
+                }
+            }
+        };
+        if !all_chunks.is_empty() {
+            outcome.chunks = all_chunks;
+        }
+        outcome.emitted_live = sender.is_some();
+        Ok(outcome)
     }
 
     async fn post_form<T: DeserializeOwned>(
@@ -142,420 +353,166 @@ impl HttpRuntime {
     }
 }
 
-pub struct MockProviderClient {
-    provider_id: String,
+fn should_log_stream_chunk_debug(index: usize) -> bool {
+    index <= 3 || index.is_multiple_of(STREAM_DEBUG_SAMPLE_EVERY)
 }
 
-impl MockProviderClient {
-    pub fn new(provider_id: String) -> Self {
-        Self { provider_id }
-    }
-}
-
-#[async_trait]
-impl ProviderClient for MockProviderClient {
-    async fn generate(
-        &self,
-        model: &str,
-        input: &str,
-        _reasoning: Option<&ReasoningConfig>,
-    ) -> Result<ProviderOutcome, CoreError> {
-        let mut chunks = Vec::new();
-        let mut output_tokens = 0u32;
-
-        for token in input.split_whitespace() {
-            output_tokens = output_tokens.saturating_add(1);
-            chunks.push(format!("{token} "));
+fn truncate_for_debug(text: &str, limit: usize) -> String {
+    let mut out = String::new();
+    for (i, ch) in text.chars().enumerate() {
+        if i >= limit {
+            out.push_str("...");
+            return out;
         }
-
-        if chunks.is_empty() {
-            return Err(CoreError::Provider("provider returned empty output".to_string()));
-        }
-
-        chunks.insert(0, format!("[{}] ", self.provider_id));
-        let reasoning = if model.contains("deepseek-reasoner") {
-            Some("Reasoned with DeepSeek reasoning mode before composing final answer.".to_string())
-        } else {
-            None
-        };
-
-        Ok(ProviderOutcome { chunks, output_tokens, reasoning, reasoning_details: None })
+        out.push(ch);
     }
+    out
 }
 
-pub struct OpenAiClient {
-    runtime: HttpRuntime,
-}
-
-impl OpenAiClient {
-    pub fn new(
-        provider_id: String,
-        base_url: Option<String>,
-        api_key: Option<String>,
-        http_client: Option<Client>,
-        max_inflight: Option<usize>,
-    ) -> Self {
-        Self {
-            runtime: HttpRuntime::new(provider_id, base_url, api_key, http_client, max_inflight),
-        }
-    }
-}
-
-#[async_trait]
-impl ProviderClient for OpenAiClient {
-    async fn generate(
-        &self,
-        model: &str,
-        input: &str,
-        reasoning: Option<&ReasoningConfig>,
-    ) -> Result<ProviderOutcome, CoreError> {
-        let url = self.runtime.build_url("chat/completions")?;
-        let payload = build_openai_payload(model, input, reasoning);
-        let response: ChatCompletionsResponse =
-            self.runtime.post_json(&url, &payload, None, &[]).await?;
-        map_chat_completion_response(response)
-    }
-}
-
-pub struct OpenRouterClient {
-    runtime: HttpRuntime,
-}
-
-impl OpenRouterClient {
-    pub fn new(
-        base_url: Option<String>,
-        api_key: Option<String>,
-        http_client: Option<Client>,
-        max_inflight: Option<usize>,
-    ) -> Self {
-        Self {
-            runtime: HttpRuntime::new(
-                "openrouter".to_string(),
-                base_url,
-                api_key,
-                http_client,
-                max_inflight,
-            ),
-        }
-    }
-}
-
-#[async_trait]
-impl ProviderClient for OpenRouterClient {
-    async fn generate(
-        &self,
-        model: &str,
-        input: &str,
-        reasoning: Option<&ReasoningConfig>,
-    ) -> Result<ProviderOutcome, CoreError> {
-        let url = self.runtime.build_url("chat/completions")?;
-        let payload = build_openrouter_payload(model, input, reasoning);
-        let response: ChatCompletionsResponse =
-            self.runtime.post_json(&url, &payload, None, &[]).await?;
-        map_chat_completion_response(response)
-    }
-}
-
-pub struct DeepSeekClient {
-    runtime: HttpRuntime,
-}
-
-impl DeepSeekClient {
-    pub fn new(
-        base_url: Option<String>,
-        api_key: Option<String>,
-        http_client: Option<Client>,
-        max_inflight: Option<usize>,
-    ) -> Self {
-        Self {
-            runtime: HttpRuntime::new(
-                "deepseek".to_string(),
-                base_url,
-                api_key,
-                http_client,
-                max_inflight,
-            ),
-        }
-    }
-}
-
-#[async_trait]
-impl ProviderClient for DeepSeekClient {
-    async fn generate(
-        &self,
-        model: &str,
-        input: &str,
-        reasoning: Option<&ReasoningConfig>,
-    ) -> Result<ProviderOutcome, CoreError> {
-        let url = self.runtime.build_url("chat/completions")?;
-        let payload = build_deepseek_payload(model, input, reasoning);
-        let response: ChatCompletionsResponse =
-            self.runtime.post_json(&url, &payload, None, &[]).await?;
-        map_chat_completion_response(response)
-    }
-}
-
-pub struct ZaiClient {
-    runtime: HttpRuntime,
-}
-
-impl ZaiClient {
-    pub fn new(
-        base_url: Option<String>,
-        api_key: Option<String>,
-        http_client: Option<Client>,
-        max_inflight: Option<usize>,
-    ) -> Self {
-        Self {
-            runtime: HttpRuntime::new(
-                "zai".to_string(),
-                base_url,
-                api_key,
-                http_client,
-                max_inflight,
-            ),
-        }
-    }
-}
-
-#[async_trait]
-impl ProviderClient for ZaiClient {
-    async fn generate(
-        &self,
-        model: &str,
-        input: &str,
-        reasoning: Option<&ReasoningConfig>,
-    ) -> Result<ProviderOutcome, CoreError> {
-        let url = self.runtime.build_url("chat/completions")?;
-        let payload = build_zai_payload(model, input, reasoning);
-        let response: ChatCompletionsResponse =
-            self.runtime.post_json(&url, &payload, None, &[]).await?;
-        map_chat_completion_response(response)
-    }
-}
-
-pub struct YandexResponsesClient {
-    runtime: HttpRuntime,
-    project: Option<String>,
-}
-
-impl YandexResponsesClient {
-    pub fn new(
-        base_url: Option<String>,
-        api_key: Option<String>,
-        project: Option<String>,
-        http_client: Option<Client>,
-        max_inflight: Option<usize>,
-    ) -> Self {
-        Self {
-            runtime: HttpRuntime::new(
-                "yandex".to_string(),
-                base_url,
-                api_key,
-                http_client,
-                max_inflight,
-            ),
-            project,
-        }
-    }
-}
-
-#[async_trait]
-impl ProviderClient for YandexResponsesClient {
-    async fn generate(
-        &self,
-        model: &str,
-        input: &str,
-        _reasoning: Option<&ReasoningConfig>,
-    ) -> Result<ProviderOutcome, CoreError> {
-        let url = self.runtime.build_url("responses")?;
-        let upstream_model = build_yandex_upstream_model(model, self.project.as_deref())?;
-        let payload = build_yandex_responses_payload(&upstream_model, input);
-        let mut headers = Vec::new();
-        if let Some(project) = self.project.as_deref().filter(|value| !value.trim().is_empty()) {
-            headers.push(("OpenAI-Project".to_string(), project.to_string()));
-        }
-        let response: ResponsesApiResponse =
-            self.runtime.post_json(&url, &payload, None, &headers).await?;
-        map_responses_api_response(response)
-    }
-}
-
-pub struct GigachatClient {
-    runtime: HttpRuntime,
-    scope: String,
-    token_state: Arc<Mutex<Option<GigachatToken>>>,
-}
-
-impl GigachatClient {
-    pub fn new(
-        base_url: Option<String>,
-        authorization_key: Option<String>,
-        scope: Option<String>,
-        http_client: Option<Client>,
-        max_inflight: Option<usize>,
-    ) -> Self {
-        Self {
-            runtime: HttpRuntime::new(
-                "gigachat".to_string(),
-                base_url,
-                authorization_key,
-                http_client,
-                max_inflight,
-            ),
-            scope: scope.unwrap_or_else(|| GIGACHAT_DEFAULT_SCOPE.to_string()),
-            token_state: Arc::new(Mutex::new(None)),
-        }
-    }
-
-    async fn access_token(&self) -> Result<String, CoreError> {
-        let now_ms = current_time_millis();
-        let mut guard = self.token_state.lock().await;
-        if let Some(token) = guard.as_ref()
-            && token.expires_at_ms > now_ms + TOKEN_REFRESH_BUFFER_MS
-        {
-            return Ok(token.access_token.clone());
-        }
-
-        let authorization_key = self.runtime.api_key().ok_or_else(|| {
-            CoreError::Provider("provider api_key is not configured for gigachat".to_string())
-        })?;
-
-        let headers = vec![
-            ("Authorization".to_string(), format!("Bearer {authorization_key}")),
-            ("RqUID".to_string(), Uuid::new_v4().to_string()),
-            ("Content-Type".to_string(), "application/x-www-form-urlencoded".to_string()),
-        ];
-        let form_fields = vec![("scope".to_string(), self.scope.clone())];
-
-        let response: GigachatOauthResponse =
-            self.runtime.post_form(GIGACHAT_OAUTH_URL, &form_fields, &headers).await?;
-
-        let token = GigachatToken {
-            access_token: response.access_token,
-            expires_at_ms: response.expires_at,
-        };
-
-        let value = token.access_token.clone();
-        *guard = Some(token);
-        Ok(value)
-    }
-}
-
-#[async_trait]
-impl ProviderClient for GigachatClient {
-    async fn generate(
-        &self,
-        model: &str,
-        input: &str,
-        _reasoning: Option<&ReasoningConfig>,
-    ) -> Result<ProviderOutcome, CoreError> {
-        let access_token = self.access_token().await?;
-        let url = self.runtime.build_url("chat/completions")?;
-        let payload = build_gigachat_payload(model, input);
-        let response: ChatCompletionsResponse =
-            self.runtime.post_json(&url, &payload, Some(access_token.as_str()), &[]).await?;
-        map_chat_completion_response(response)
-    }
-}
-
-#[derive(Debug, Clone)]
-struct GigachatToken {
-    access_token: String,
-    expires_at_ms: i64,
-}
-
-fn current_time_millis() -> i64 {
-    let Ok(duration) = SystemTime::now().duration_since(UNIX_EPOCH) else {
-        return 0;
-    };
-    duration.as_millis() as i64
-}
-
-fn build_openai_payload(model: &str, input: &str, reasoning: Option<&ReasoningConfig>) -> Value {
-    let mut payload = base_chat_payload(model, input);
-    if let Some(reasoning_cfg) = normalize_openai_reasoning(reasoning) {
-        payload.insert("reasoning".to_string(), reasoning_cfg);
-    }
-    Value::Object(payload)
-}
-
-fn build_openrouter_payload(
+pub(crate) fn base_chat_payload(
     model: &str,
-    input: &str,
-    reasoning: Option<&ReasoningConfig>,
-) -> Value {
-    let mut payload = base_chat_payload(model, input);
-    if let Some(reasoning_cfg) = reasoning
-        && let Ok(value) = serde_json::to_value(reasoning_cfg)
-    {
-        payload.insert("reasoning".to_string(), value);
-    }
-    Value::Object(payload)
-}
-
-fn build_deepseek_payload(model: &str, input: &str, reasoning: Option<&ReasoningConfig>) -> Value {
-    let mut payload = base_chat_payload(model, input);
-    let has_effort = reasoning
-        .and_then(|cfg| cfg.effort.as_deref())
-        .is_some_and(|value| !value.trim().is_empty());
-    if model == "deepseek-chat" && has_effort {
-        payload.insert("thinking".to_string(), json!({ "type": "enabled" }));
-    }
-    Value::Object(payload)
-}
-
-fn build_zai_payload(model: &str, input: &str, reasoning: Option<&ReasoningConfig>) -> Value {
-    let mut payload = base_chat_payload(model, input);
-    if let Some(effort) = reasoning.and_then(|cfg| cfg.effort.as_deref()).map(str::trim)
-        && !effort.is_empty()
-    {
-        let thinking_type =
-            if effort.eq_ignore_ascii_case("none") { "disabled" } else { "enabled" };
-        payload.insert("thinking".to_string(), json!({ "type": thinking_type }));
-    }
-    Value::Object(payload)
-}
-
-fn build_gigachat_payload(model: &str, input: &str) -> Value {
-    Value::Object(base_chat_payload(model, input))
-}
-
-fn base_chat_payload(model: &str, input: &str) -> Map<String, Value> {
+    input: &ResponsesInput,
+    tools: Option<&[Value]>,
+    tool_choice: Option<&Value>,
+) -> Map<String, Value> {
     let mut payload = Map::new();
     payload.insert("model".to_string(), Value::String(model.to_string()));
-    payload.insert("messages".to_string(), json!([{ "role": "user", "content": input }]));
-    payload.insert("stream".to_string(), Value::Bool(false));
+    payload.insert(
+        "messages".to_string(),
+        Value::Array(build_chat_messages_from_responses_input(input)),
+    );
+    payload.insert("stream".to_string(), Value::Bool(true));
+    if let Some(defs) = tools
+        && !defs.is_empty()
+        && let Ok(value) = serde_json::to_value(defs)
+    {
+        payload.insert("tools".to_string(), value);
+    }
+    if let Some(choice) = tool_choice {
+        payload.insert("tool_choice".to_string(), choice.clone());
+    }
     payload
 }
 
-fn build_yandex_responses_payload(model: &str, input: &str) -> Value {
-    json!({
-        "model": model,
-        "input": input,
-        "stream": false
-    })
+fn build_chat_messages_from_responses_input(input: &ResponsesInput) -> Vec<Value> {
+    match input {
+        ResponsesInput::Text(text) => vec![json!({ "role": "user", "content": text })],
+        ResponsesInput::Items(items) => {
+            let mut call_id_to_name = std::collections::HashMap::<String, String>::new();
+            for item in items {
+                if item.kind.as_deref() == Some("function_call")
+                    && let (Some(call_id), Some(name)) =
+                        (item.call_id.as_deref(), item.name.as_deref())
+                    && !call_id.trim().is_empty()
+                    && !name.trim().is_empty()
+                {
+                    call_id_to_name.insert(call_id.to_string(), name.to_string());
+                }
+            }
+
+            let mut messages = Vec::new();
+            for item in items {
+                if let Some(message) =
+                    map_response_input_item_to_chat_message(item, &call_id_to_name)
+                {
+                    messages.push(message);
+                }
+            }
+            if messages.is_empty() {
+                vec![json!({ "role": "user", "content": input.to_canonical_text() })]
+            } else {
+                messages
+            }
+        }
+    }
 }
 
-fn build_yandex_upstream_model(model: &str, project: Option<&str>) -> Result<String, CoreError> {
-    if model.starts_with("gpt://") {
-        return Ok(model.to_string());
+fn map_response_input_item_to_chat_message(
+    item: &ResponseInputItem,
+    call_id_to_name: &std::collections::HashMap<String, String>,
+) -> Option<Value> {
+    let kind = item.kind.as_deref().unwrap_or_default();
+    if kind == "function_call" {
+        let call_id = item.call_id.as_deref()?.trim();
+        let name = item.name.as_deref()?.trim();
+        if call_id.is_empty() || name.is_empty() {
+            return None;
+        }
+        let arguments = item.arguments.as_deref().unwrap_or("{}").trim().to_string();
+        return Some(json!({
+            "role": "assistant",
+            "tool_calls": [{
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": arguments
+                }
+            }]
+        }));
     }
 
-    let project = project.map(str::trim).filter(|value| !value.is_empty()).ok_or_else(|| {
-        CoreError::Provider("provider project is not configured for yandex".to_string())
-    })?;
+    if kind == "function_call_output" {
+        let call_id = item.call_id.as_deref()?.trim();
+        if call_id.is_empty() {
+            return None;
+        }
+        let output = item
+            .output
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_string)
+            .or_else(|| extract_input_item_text(item))?;
 
-    Ok(format!("gpt://{project}/{model}"))
+        let mut tool_msg = Map::new();
+        tool_msg.insert("role".to_string(), Value::String("tool".to_string()));
+        tool_msg.insert("tool_call_id".to_string(), Value::String(call_id.to_string()));
+        tool_msg.insert("content".to_string(), Value::String(output));
+        if let Some(name) = item
+            .name
+            .as_deref()
+            .or_else(|| call_id_to_name.get(call_id).map(String::as_str))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            tool_msg.insert("name".to_string(), Value::String(name.to_string()));
+        }
+        return Some(Value::Object(tool_msg));
+    }
+
+    let role =
+        item.role.as_deref().or_else(|| if kind == "message" { Some("user") } else { None })?;
+    let normalized_role = if role == "developer" { "system" } else { role };
+    let content = extract_input_item_text(item)?;
+    Some(json!({ "role": normalized_role, "content": content }))
 }
 
-fn normalize_openai_reasoning(reasoning: Option<&ReasoningConfig>) -> Option<Value> {
-    let effort = reasoning?.effort.as_deref()?.trim();
-    if effort.is_empty() {
-        return None;
+fn extract_input_item_text(item: &ResponseInputItem) -> Option<String> {
+    if let Some(text) = item.text.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        return Some(text.to_string());
     }
-    let mapped = if effort.eq_ignore_ascii_case("xhigh") { "high" } else { effort };
-    Some(json!({ "effort": mapped }))
+    let content = item.content.as_ref()?;
+    match content {
+        ResponseInputContent::Text(text) => {
+            let text = text.trim();
+            if text.is_empty() { None } else { Some(text.to_string()) }
+        }
+        ResponseInputContent::Parts(parts) => {
+            let joined = parts
+                .iter()
+                .filter_map(|part| {
+                    part.input_text
+                        .as_deref()
+                        .or(part.output_text.as_deref())
+                        .or(part.text.as_deref())
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                })
+                .collect::<String>();
+            if joined.is_empty() { None } else { Some(joined) }
+        }
+    }
 }
 
 fn map_chat_completion_response(
@@ -566,14 +523,21 @@ fn map_chat_completion_response(
         .first()
         .ok_or_else(|| CoreError::Provider("provider returned empty choices".to_string()))?;
 
-    let content = extract_message_content(&first.message.content).ok_or_else(|| {
-        CoreError::Provider("provider returned empty message content".to_string())
-    })?;
+    let content = extract_message_content(&first.message.content).unwrap_or_default();
+    let tool_calls = first
+        .message
+        .tool_calls
+        .as_ref()
+        .map(|calls| map_provider_tool_calls(calls))
+        .filter(|calls| !calls.is_empty());
+    if content.is_empty() && tool_calls.is_none() {
+        return Err(CoreError::Provider("provider returned empty message content".to_string()));
+    }
 
-    let output_tokens = payload
-        .usage
-        .and_then(|usage| usage.completion_tokens)
-        .unwrap_or_else(|| content.split_whitespace().count() as u32);
+    let output_tokens =
+        payload.usage.and_then(|usage| usage.completion_tokens).unwrap_or_else(|| {
+            if content.is_empty() { 0 } else { content.split_whitespace().count() as u32 }
+        });
 
     let reasoning_details = first.message.reasoning_details.clone();
     let reasoning = first
@@ -585,32 +549,278 @@ fn map_chat_completion_response(
             reasoning_details.as_ref().and_then(|details| extract_reasoning_from_details(details))
         });
 
-    Ok(ProviderOutcome { chunks: vec![content], output_tokens, reasoning, reasoning_details })
+    let chunks = if content.is_empty() { Vec::new() } else { vec![content] };
+    Ok(ProviderOutcome {
+        chunks,
+        output_tokens,
+        reasoning,
+        reasoning_details,
+        tool_calls,
+        emitted_live: false,
+    })
 }
 
 fn map_responses_api_response(payload: ResponsesApiResponse) -> Result<ProviderOutcome, CoreError> {
-    let content = extract_message_text_from_responses_output(&payload.output).ok_or_else(|| {
-        CoreError::Provider("provider returned empty message content".to_string())
-    })?;
+    let content = extract_message_text_from_responses_output(&payload.output).unwrap_or_default();
+    let tool_calls = extract_tool_calls_from_responses_output(&payload.output);
+    if content.is_empty() && tool_calls.is_none() {
+        return Err(CoreError::Provider("provider returned empty message content".to_string()));
+    }
 
     let reasoning_details = extract_reasoning_content_items_from_responses_output(&payload.output);
     let reasoning = extract_reasoning_text_from_responses_output(&payload.output).or_else(|| {
         reasoning_details.as_ref().and_then(|details| extract_reasoning_from_details(details))
     });
 
-    let output_tokens = payload
-        .usage
-        .as_ref()
-        .map(|u| u.output_tokens)
-        .unwrap_or_else(|| content.split_whitespace().count() as u32);
+    let output_tokens = payload.usage.as_ref().map(|u| u.output_tokens).unwrap_or_else(|| {
+        if content.is_empty() { 0 } else { content.split_whitespace().count() as u32 }
+    });
 
-    Ok(ProviderOutcome { chunks: vec![content], output_tokens, reasoning, reasoning_details })
+    let chunks = if content.is_empty() { Vec::new() } else { vec![content] };
+    Ok(ProviderOutcome {
+        chunks,
+        output_tokens,
+        reasoning,
+        reasoning_details,
+        tool_calls,
+        emitted_live: false,
+    })
 }
 
-#[derive(Debug, Deserialize)]
-struct GigachatOauthResponse {
-    access_token: String,
-    expires_at: i64,
+fn map_chat_completion_stream_text(payload: &str) -> Result<ProviderOutcome, CoreError> {
+    let mut chunks = Vec::<String>::new();
+    let mut all_content = String::new();
+    let mut reasoning = String::new();
+    let mut reasoning_details = Vec::<Value>::new();
+    let mut output_tokens = None::<u32>;
+    let mut tool_calls_by_index = HashMap::<usize, StreamToolCall>::new();
+
+    for event in extract_sse_data_events(payload) {
+        if event == "[DONE]" {
+            continue;
+        }
+        let parsed: ChatCompletionsStreamChunk = serde_json::from_str(&event)
+            .map_err(|err| CoreError::Provider(format!("provider stream parse failed: {err}")))?;
+
+        if let Some(usage) = parsed.usage.and_then(|usage| usage.completion_tokens) {
+            output_tokens = Some(usage);
+        }
+
+        for choice in parsed.choices {
+            if let Some(content_delta) = extract_message_content(&choice.delta.content)
+                && !content_delta.is_empty()
+            {
+                all_content.push_str(&content_delta);
+                chunks.push(content_delta);
+            }
+
+            if let Some(text) = choice.delta.reasoning_content.or(choice.delta.reasoning)
+                && !text.trim().is_empty()
+            {
+                reasoning.push_str(&text);
+            }
+
+            if let Some(details) = choice.delta.reasoning_details {
+                reasoning_details.extend(details);
+            }
+
+            for tool_delta in choice.delta.tool_calls.unwrap_or_default() {
+                let index = tool_delta.index.unwrap_or(tool_calls_by_index.len());
+                let entry = tool_calls_by_index.entry(index).or_default();
+                if let Some(id) = tool_delta.id.filter(|v| !v.trim().is_empty()) {
+                    entry.id = Some(id);
+                }
+                if let Some(kind) = tool_delta.kind.filter(|v| !v.trim().is_empty()) {
+                    entry.kind = Some(kind);
+                }
+                if let Some(function) = tool_delta.function {
+                    if let Some(name) = function.name.filter(|v| !v.trim().is_empty()) {
+                        entry.name = Some(name);
+                    }
+                    if let Some(arguments) = function.arguments {
+                        entry.arguments.push_str(&arguments);
+                    }
+                }
+            }
+        }
+    }
+
+    let tool_calls = finalize_stream_tool_calls(tool_calls_by_index);
+    let reasoning = if reasoning.trim().is_empty() { None } else { Some(reasoning) };
+    let reasoning_details =
+        if reasoning_details.is_empty() { None } else { Some(reasoning_details) };
+    let output_tokens = output_tokens.unwrap_or_else(|| {
+        if all_content.is_empty() { 0 } else { all_content.split_whitespace().count() as u32 }
+    });
+
+    if all_content.is_empty() && tool_calls.is_none() {
+        return Err(CoreError::Provider("provider returned empty message content".to_string()));
+    }
+
+    let final_chunks = if all_content.is_empty() { Vec::new() } else { chunks };
+    Ok(ProviderOutcome {
+        chunks: final_chunks,
+        output_tokens,
+        reasoning,
+        reasoning_details,
+        tool_calls,
+        emitted_live: false,
+    })
+}
+
+fn map_responses_stream_text(payload: &str) -> Result<ProviderOutcome, CoreError> {
+    let mut chunks = Vec::<String>::new();
+    let mut all_content = String::new();
+    let mut tool_calls = Vec::<ToolCall>::new();
+
+    for event in extract_sse_data_events(payload) {
+        if event == "[DONE]" {
+            continue;
+        }
+        let parsed: ResponsesStreamEvent = serde_json::from_str(&event)
+            .map_err(|err| CoreError::Provider(format!("provider stream parse failed: {err}")))?;
+
+        if parsed.kind == "response.output_text.delta"
+            && let Some(delta) = parsed.delta.or(parsed.text)
+            && !delta.is_empty()
+        {
+            all_content.push_str(&delta);
+            chunks.push(delta);
+            continue;
+        }
+
+        if parsed.kind == "response.output_item.added"
+            && let Some(item) = parsed.item
+            && item.kind == "function_call"
+            && let Some(call_id) = item.call_id.as_deref()
+            && let Some(name) = item.name.as_deref()
+            && !call_id.trim().is_empty()
+            && !name.trim().is_empty()
+        {
+            tool_calls.push(ToolCall {
+                id: call_id.to_string(),
+                kind: "function".to_string(),
+                function: ToolFunction {
+                    name: name.to_string(),
+                    arguments: item.arguments.unwrap_or_else(|| "{}".to_string()),
+                },
+            });
+            continue;
+        }
+
+        if parsed.kind == "response.completed"
+            && let Some(response) = parsed.response
+        {
+            let mut mapped = map_responses_api_response(response)?;
+            if !all_content.is_empty() && mapped.chunks.is_empty() {
+                mapped.chunks = chunks.clone();
+            }
+            if mapped.tool_calls.is_none() && !tool_calls.is_empty() {
+                mapped.tool_calls = Some(tool_calls.clone());
+            }
+            return Ok(mapped);
+        }
+    }
+
+    let tool_calls = if tool_calls.is_empty() { None } else { Some(tool_calls) };
+    let output_tokens =
+        if all_content.is_empty() { 0 } else { all_content.split_whitespace().count() as u32 };
+
+    if all_content.is_empty() && tool_calls.is_none() {
+        return Err(CoreError::Provider("provider returned empty message content".to_string()));
+    }
+
+    Ok(ProviderOutcome {
+        chunks: if all_content.is_empty() { Vec::new() } else { chunks },
+        output_tokens,
+        reasoning: None,
+        reasoning_details: None,
+        tool_calls,
+        emitted_live: false,
+    })
+}
+
+fn extract_sse_data_events(payload: &str) -> Vec<String> {
+    let mut owned = payload.replace('\r', "");
+    split_sse_frames(&mut owned).into_iter().filter_map(|frame| sse_frame_to_data(&frame)).collect()
+}
+
+fn split_sse_frames(buffer: &mut String) -> Vec<String> {
+    let mut frames = Vec::new();
+    while let Some(idx) = buffer.find("\n\n") {
+        let frame = buffer[..idx].to_string();
+        buffer.replace_range(..idx + 2, "");
+        frames.push(frame);
+    }
+    frames
+}
+
+fn sse_frame_to_data(frame: &str) -> Option<String> {
+    let mut data_lines = Vec::<String>::new();
+    for line in frame.lines() {
+        if line.is_empty() || line.starts_with(':') {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("data:") {
+            data_lines.push(rest.trim_start().to_string());
+        }
+    }
+    if data_lines.is_empty() { None } else { Some(data_lines.join("\n")) }
+}
+
+fn extract_chat_delta_chunks(frame: &str, _request_id: &str) -> Result<Vec<String>, CoreError> {
+    let Some(data) = sse_frame_to_data(frame) else {
+        return Ok(Vec::new());
+    };
+    if data == "[DONE]" {
+        return Ok(Vec::new());
+    }
+    let parsed: ChatCompletionsStreamChunk = serde_json::from_str(&data)
+        .map_err(|err| CoreError::Provider(format!("provider stream parse failed: {err}")))?;
+    let mut chunks = Vec::new();
+    for choice in parsed.choices {
+        if let Some(content_delta) = extract_message_content(&choice.delta.content)
+            && !content_delta.is_empty()
+        {
+            chunks.push(content_delta);
+        }
+    }
+    Ok(chunks)
+}
+
+fn extract_chat_reasoning_delta(
+    frame: &str,
+    _request_id: &str,
+) -> Result<Option<String>, CoreError> {
+    let Some(data) = sse_frame_to_data(frame) else {
+        return Ok(None);
+    };
+    if data == "[DONE]" {
+        return Ok(None);
+    }
+    let parsed: ChatCompletionsStreamChunk = serde_json::from_str(&data)
+        .map_err(|err| CoreError::Provider(format!("provider stream parse failed: {err}")))?;
+    let text = parsed
+        .choices
+        .into_iter()
+        .filter_map(|choice| choice.delta.reasoning_content.or(choice.delta.reasoning))
+        .collect::<String>();
+    if text.trim().is_empty() { Ok(None) } else { Ok(Some(text)) }
+}
+
+fn extract_responses_text_delta(frame: &str) -> Result<Option<String>, CoreError> {
+    let Some(data) = sse_frame_to_data(frame) else {
+        return Ok(None);
+    };
+    if data == "[DONE]" {
+        return Ok(None);
+    }
+    let parsed: ResponsesStreamEvent = serde_json::from_str(&data)
+        .map_err(|err| CoreError::Provider(format!("provider stream parse failed: {err}")))?;
+    if parsed.kind == "response.output_text.delta" {
+        return Ok(parsed.delta.or(parsed.text));
+    }
+    Ok(None)
 }
 
 #[derive(Debug, Deserialize)]
@@ -635,6 +845,8 @@ struct Message {
     reasoning_content: Option<String>,
     #[serde(default)]
     reasoning_details: Option<Vec<Value>>,
+    #[serde(default)]
+    tool_calls: Option<Vec<ProviderToolCall>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -665,12 +877,172 @@ struct ResponsesApiOutputItem {
     content: Option<Vec<Value>>,
     #[serde(default)]
     summary: Option<Vec<ResponsesApiSummary>>,
+    #[serde(default)]
+    call_id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    arguments: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatCompletionsStreamChunk {
+    #[serde(default)]
+    choices: Vec<StreamChoice>,
+    #[serde(default)]
+    usage: Option<Usage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StreamChoice {
+    #[serde(default)]
+    delta: StreamMessageDelta,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct StreamMessageDelta {
+    #[serde(default)]
+    content: Value,
+    #[serde(default)]
+    reasoning: Option<String>,
+    #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
+    reasoning_details: Option<Vec<Value>>,
+    #[serde(default)]
+    tool_calls: Option<Vec<ProviderToolCallDelta>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProviderToolCallDelta {
+    #[serde(default)]
+    index: Option<usize>,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(rename = "type", default)]
+    kind: Option<String>,
+    #[serde(default)]
+    function: Option<ProviderToolFunctionDelta>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProviderToolFunctionDelta {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    arguments: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct StreamToolCall {
+    id: Option<String>,
+    kind: Option<String>,
+    name: Option<String>,
+    arguments: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResponsesStreamEvent {
+    #[serde(rename = "type", default)]
+    kind: String,
+    #[serde(default)]
+    delta: Option<String>,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    item: Option<ResponsesApiOutputItem>,
+    #[serde(default)]
+    response: Option<ResponsesApiResponse>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ResponsesApiSummary {
     #[serde(default)]
     text: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProviderToolCall {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(rename = "type", default)]
+    kind: Option<String>,
+    #[serde(default)]
+    function: Option<ProviderToolFunction>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProviderToolFunction {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    arguments: Option<String>,
+}
+
+fn map_provider_tool_calls(tool_calls: &[ProviderToolCall]) -> Vec<ToolCall> {
+    tool_calls
+        .iter()
+        .filter_map(|call| {
+            let function = call.function.as_ref()?;
+            let name = function.name.as_deref()?.trim();
+            if name.is_empty() {
+                return None;
+            }
+            let arguments = function.arguments.clone().unwrap_or_else(|| "{}".to_string());
+            let call_id =
+                call.id.clone().unwrap_or_else(|| format!("call_{}", Uuid::new_v4().simple()));
+            Some(ToolCall {
+                id: call_id,
+                kind: call.kind.clone().unwrap_or_else(|| "function".to_string()),
+                function: ToolFunction { name: name.to_string(), arguments },
+            })
+        })
+        .collect()
+}
+
+fn finalize_stream_tool_calls(by_index: HashMap<usize, StreamToolCall>) -> Option<Vec<ToolCall>> {
+    let mut sorted = by_index.into_iter().collect::<Vec<_>>();
+    sorted.sort_by_key(|(idx, _)| *idx);
+    let calls = sorted
+        .into_iter()
+        .filter_map(|(_, call)| {
+            let name = call.name?.trim().to_string();
+            if name.is_empty() {
+                return None;
+            }
+            let arguments =
+                if call.arguments.trim().is_empty() { "{}".to_string() } else { call.arguments };
+            Some(ToolCall {
+                id: call.id.unwrap_or_else(|| format!("call_{}", Uuid::new_v4().simple())),
+                kind: call.kind.unwrap_or_else(|| "function".to_string()),
+                function: ToolFunction { name, arguments },
+            })
+        })
+        .collect::<Vec<_>>();
+    if calls.is_empty() { None } else { Some(calls) }
+}
+
+fn extract_tool_calls_from_responses_output(
+    output: &[ResponsesApiOutputItem],
+) -> Option<Vec<ToolCall>> {
+    let calls = output
+        .iter()
+        .filter(|item| item.kind == "function_call")
+        .filter_map(|item| {
+            let call_id = item.call_id.as_deref()?.trim();
+            let name = item.name.as_deref()?.trim();
+            if call_id.is_empty() || name.is_empty() {
+                return None;
+            }
+            let arguments = item.arguments.clone().unwrap_or_else(|| "{}".to_string());
+            Some(ToolCall {
+                id: call_id.to_string(),
+                kind: "function".to_string(),
+                function: ToolFunction { name: name.to_string(), arguments },
+            })
+        })
+        .collect::<Vec<_>>();
+    if calls.is_empty() { None } else { Some(calls) }
 }
 
 fn extract_message_content(content: &Value) -> Option<String> {
@@ -757,53 +1129,166 @@ fn extract_reasoning_content_items_from_responses_output(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clients::{
+        deepseek::build_deepseek_payload, openai::build_openai_payload,
+        openrouter::build_openrouter_payload, yandex::build_yandex_upstream_model,
+        zai::build_zai_payload,
+    };
+    use xrouter_contracts::{ReasoningConfig, ResponseInputItem, ResponsesInput, ToolFunction};
 
     fn reasoning(effort: &str) -> ReasoningConfig {
         ReasoningConfig { effort: Some(effort.to_string()) }
     }
 
+    fn text_input(text: &str) -> ResponsesInput {
+        ResponsesInput::Text(text.to_string())
+    }
+
     #[test]
     fn openrouter_keeps_reasoning_effort_as_is() {
-        let payload =
-            build_openrouter_payload("openai/gpt-5.2", "Reply with ok", Some(&reasoning("xhigh")));
+        let input = text_input("Reply with ok");
+        let payload = build_openrouter_payload(
+            "openai/gpt-5.2",
+            &input,
+            Some(&reasoning("xhigh")),
+            None,
+            None,
+        );
         assert_eq!(payload["reasoning"]["effort"], "xhigh");
         assert!(payload.get("thinking").is_none());
     }
 
     #[test]
     fn deepseek_chat_enables_thinking_when_effort_present() {
-        let payload =
-            build_deepseek_payload("deepseek-chat", "Reply with ok", Some(&reasoning("medium")));
+        let input = text_input("Reply with ok");
+        let (payload, _) =
+            build_deepseek_payload("deepseek-chat", &input, Some(&reasoning("medium")), None, None);
         assert_eq!(payload["thinking"]["type"], "enabled");
         assert!(payload.get("reasoning").is_none());
     }
 
     #[test]
     fn deepseek_reasoner_does_not_set_thinking() {
-        let payload =
-            build_deepseek_payload("deepseek-reasoner", "Reply with ok", Some(&reasoning("high")));
+        let input = text_input("Reply with ok");
+        let (payload, _) = build_deepseek_payload(
+            "deepseek-reasoner",
+            &input,
+            Some(&reasoning("high")),
+            None,
+            None,
+        );
         assert!(payload.get("thinking").is_none());
     }
 
     #[test]
     fn non_openrouter_maps_xhigh_to_high() {
+        let input = text_input("Reply with ok");
         let payload =
-            build_openai_payload("gpt-4.1-mini", "Reply with ok", Some(&reasoning("xhigh")));
+            build_openai_payload("gpt-4.1-mini", &input, Some(&reasoning("xhigh")), None, None);
         assert_eq!(payload["reasoning"]["effort"], "high");
     }
 
     #[test]
     fn zai_enables_thinking_when_effort_present() {
-        let payload = build_zai_payload("glm-5", "Reply with ok", Some(&reasoning("high")));
+        let input = text_input("Reply with ok");
+        let payload = build_zai_payload("glm-5", &input, Some(&reasoning("high")), None, None);
         assert_eq!(payload["thinking"]["type"], "enabled");
         assert!(payload.get("reasoning").is_none());
     }
 
     #[test]
     fn zai_disables_thinking_when_effort_none() {
-        let payload = build_zai_payload("glm-5", "Reply with ok", Some(&reasoning("none")));
+        let input = text_input("Reply with ok");
+        let payload = build_zai_payload("glm-5", &input, Some(&reasoning("none")), None, None);
         assert_eq!(payload["thinking"]["type"], "disabled");
         assert!(payload.get("reasoning").is_none());
+    }
+
+    #[test]
+    fn responses_input_items_map_to_chat_messages_with_tool_roundtrip() {
+        let input = ResponsesInput::Items(vec![
+            ResponseInputItem {
+                kind: Some("function_call".to_string()),
+                role: None,
+                content: None,
+                text: None,
+                output: None,
+                call_id: Some("call_1".to_string()),
+                name: Some("read_file".to_string()),
+                arguments: Some("{\"path\":\"README.md\"}".to_string()),
+                extra: Default::default(),
+            },
+            ResponseInputItem {
+                kind: Some("function_call_output".to_string()),
+                role: None,
+                content: None,
+                text: None,
+                output: Some("{\"ok\":true}".to_string()),
+                call_id: Some("call_1".to_string()),
+                name: None,
+                arguments: None,
+                extra: Default::default(),
+            },
+            ResponseInputItem {
+                kind: Some("message".to_string()),
+                role: Some("user".to_string()),
+                content: Some(ResponseInputContent::Text("continue".to_string())),
+                text: None,
+                output: None,
+                call_id: None,
+                name: None,
+                arguments: None,
+                extra: Default::default(),
+            },
+        ]);
+
+        let messages = build_chat_messages_from_responses_input(&input);
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0]["role"], "assistant");
+        assert_eq!(messages[0]["tool_calls"][0]["id"], "call_1");
+        assert_eq!(messages[1]["role"], "tool");
+        assert_eq!(messages[1]["tool_call_id"], "call_1");
+        assert_eq!(messages[1]["name"], "read_file");
+        assert_eq!(messages[2]["role"], "user");
+        assert_eq!(messages[2]["content"], "continue");
+    }
+
+    #[test]
+    fn map_chat_completion_response_accepts_tool_only_message() {
+        let payload = ChatCompletionsResponse {
+            choices: vec![Choice {
+                message: Message {
+                    content: Value::String(String::new()),
+                    reasoning: None,
+                    reasoning_content: None,
+                    reasoning_details: None,
+                    tool_calls: Some(vec![ProviderToolCall {
+                        id: Some("call_1".to_string()),
+                        kind: Some("function".to_string()),
+                        function: Some(ProviderToolFunction {
+                            name: Some("read_file".to_string()),
+                            arguments: Some("{\"path\":\"README.md\"}".to_string()),
+                        }),
+                    }]),
+                },
+            }],
+            usage: Some(Usage { completion_tokens: Some(7) }),
+        };
+
+        let outcome = map_chat_completion_response(payload).expect("tool-only completion is valid");
+        assert!(outcome.chunks.is_empty());
+        assert_eq!(outcome.output_tokens, 7);
+        assert_eq!(
+            outcome.tool_calls,
+            Some(vec![ToolCall {
+                id: "call_1".to_string(),
+                kind: "function".to_string(),
+                function: ToolFunction {
+                    name: "read_file".to_string(),
+                    arguments: "{\"path\":\"README.md\"}".to_string(),
+                },
+            }])
+        );
     }
 
     #[test]
@@ -858,5 +1343,54 @@ mod tests {
             error.to_string(),
             "provider error: provider project is not configured for yandex"
         );
+    }
+
+    #[test]
+    fn chat_sse_with_delta_only_is_not_empty() {
+        let sse = concat!(
+            "event: message\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"index\":0,\"finish_reason\":null}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let outcome = map_chat_completion_stream_text(sse).expect("delta-only SSE must parse");
+        assert_eq!(outcome.chunks.join(""), "ok");
+        assert!(outcome.tool_calls.is_none());
+    }
+
+    #[test]
+    fn responses_sse_with_delta_only_is_not_empty() {
+        let sse = concat!(
+            "event: response.output_text.delta\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n",
+            "event: response.completed\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}],\"usage\":{\"output_tokens\":1}}}\n\n"
+        );
+        let outcome = map_responses_stream_text(sse).expect("responses SSE must parse");
+        assert_eq!(outcome.chunks.join(""), "ok");
+    }
+
+    #[test]
+    fn upstream_stream_flag_is_forced_true_for_all_providers() {
+        // CONTRACT GUARD: do not weaken this test.
+        // All upstream provider requests must always be sent with stream=true.
+        let input = text_input("hello");
+
+        let openai = build_openai_payload("gpt-4.1-mini", &input, None, None, None);
+        assert_eq!(openai["stream"], Value::Bool(true));
+
+        let openrouter = build_openrouter_payload("openai/gpt-5-mini", &input, None, None, None);
+        assert_eq!(openrouter["stream"], Value::Bool(true));
+
+        let zai = build_zai_payload("glm-5", &input, None, None, None);
+        assert_eq!(zai["stream"], Value::Bool(true));
+
+        let gigachat = crate::clients::gigachat::build_gigachat_payload("GigaChat-Pro", &input);
+        assert_eq!(gigachat["stream"], Value::Bool(true));
+
+        let yandex = crate::clients::yandex::build_yandex_responses_payload("gpt://p/m", &input);
+        assert_eq!(yandex["stream"], Value::Bool(true));
+
+        let (deepseek, _) = build_deepseek_payload("deepseek-chat", &input, None, None, None);
+        assert_eq!(deepseek["stream"], Value::Bool(true));
     }
 }

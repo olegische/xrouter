@@ -6,10 +6,12 @@ license.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+futures.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 uuid.workspace = true
 xrouter-contracts = { path = "../xrouter-contracts" }
 xrouter-core = { path = "../xrouter-core" }

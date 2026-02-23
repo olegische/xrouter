@@ -7,8 +7,8 @@ use tracing::{Instrument, error, info, info_span, warn};
 use uuid::Uuid;
 use xrouter_contracts::{
     ReasoningConfig, ResponseEvent, ResponseOutputItem, ResponseOutputText,
-    ResponseReasoningSummary, ResponsesRequest, ResponsesResponse, StageName, ToolCall,
-    ToolFunction, Usage,
+    ResponseReasoningSummary, ResponsesInput, ResponsesRequest, ResponsesResponse, StageName,
+    ToolCall, ToolFunction, Usage,
 };
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
@@ -50,9 +50,13 @@ pub struct ExecutionContext {
     pub external_ledger: u32,
     pub response_completed: bool,
     pub model: String,
+    pub request_input: ResponsesInput,
     pub input: String,
     pub request_reasoning: Option<ReasoningConfig>,
+    pub request_tools: Option<Vec<serde_json::Value>>,
+    pub request_tool_choice: Option<serde_json::Value>,
     pub output_text: String,
+    pub tool_calls: Option<Vec<ToolCall>>,
     pub reasoning: Option<String>,
     pub reasoning_details: Option<Vec<serde_json::Value>>,
     pub input_tokens: u32,
@@ -61,6 +65,8 @@ pub struct ExecutionContext {
 
 impl ExecutionContext {
     fn new(request: ResponsesRequest, billing_enabled: bool) -> Self {
+        let request_input = request.input.clone();
+        let input = request_input.to_canonical_text();
         Self {
             request_id: Uuid::new_v4().to_string(),
             state: KernelState::Ingest,
@@ -75,9 +81,13 @@ impl ExecutionContext {
             external_ledger: 0,
             response_completed: false,
             model: request.model,
-            input: request.input,
+            request_input,
+            input,
             request_reasoning: request.reasoning,
+            request_tools: request.tools,
+            request_tool_choice: request.tool_choice,
             output_text: String::new(),
+            tool_calls: None,
             reasoning: None,
             reasoning_details: None,
             input_tokens: 0,
@@ -92,6 +102,8 @@ pub struct ProviderOutcome {
     pub output_tokens: u32,
     pub reasoning: Option<String>,
     pub reasoning_details: Option<Vec<serde_json::Value>>,
+    pub tool_calls: Option<Vec<ToolCall>>,
+    pub emitted_live: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -290,9 +302,26 @@ pub trait ProviderClient: Send + Sync {
     async fn generate(
         &self,
         model: &str,
-        input: &str,
+        input: &ResponsesInput,
         reasoning: Option<&ReasoningConfig>,
+        tools: Option<&[serde_json::Value]>,
+        tool_choice: Option<&serde_json::Value>,
     ) -> Result<ProviderOutcome, CoreError>;
+
+    async fn generate_stream(
+        &self,
+        request_id: &str,
+        model: &str,
+        input: &ResponsesInput,
+        reasoning: Option<&ReasoningConfig>,
+        tools: Option<&[serde_json::Value]>,
+        tool_choice: Option<&serde_json::Value>,
+        sender: Option<&mpsc::Sender<Result<ResponseEvent, CoreError>>>,
+    ) -> Result<ProviderOutcome, CoreError> {
+        let _ = request_id;
+        let _ = sender;
+        self.generate(model, input, reasoning, tools, tool_choice).await
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -399,7 +428,15 @@ impl StageHandler for GenerateHandler {
         let provider_started_at = Instant::now();
         let result = match self
             .provider
-            .generate(&context.model, &context.input, context.request_reasoning.as_ref())
+            .generate_stream(
+                &context.request_id,
+                &context.model,
+                &context.request_input,
+                context.request_reasoning.as_ref(),
+                context.request_tools.as_deref(),
+                context.request_tool_choice.as_ref(),
+                self.sender.as_ref(),
+            )
             .await
         {
             Ok(result) => result,
@@ -423,9 +460,11 @@ impl StageHandler for GenerateHandler {
 
         context.output_tokens = result.output_tokens;
         context.billable_tokens = result.output_tokens;
+        context.tool_calls = result.tool_calls;
         context.reasoning = result.reasoning;
         context.reasoning_details = result.reasoning_details;
-        if context.client_connected
+        if !result.emitted_live
+            && context.client_connected
             && let (Some(reasoning), Some(sender)) = (&context.reasoning, &self.sender)
         {
             let _ = sender
@@ -437,7 +476,8 @@ impl StageHandler for GenerateHandler {
         }
         for chunk in result.chunks {
             context.output_text.push_str(&chunk);
-            if context.client_connected
+            if !result.emitted_live
+                && context.client_connected
                 && let Some(sender) = &self.sender
             {
                 let _ = sender
@@ -539,13 +579,22 @@ fn parse_tool_call(output_text: &str, response_id: &str) -> Option<ToolCall> {
 }
 
 fn build_output_items(
-    response_id: &str,
+    _response_id: &str,
     output_text: &str,
     reasoning: Option<String>,
     reasoning_details: Option<Vec<serde_json::Value>>,
     tool_calls: Option<Vec<ToolCall>>,
 ) -> Vec<ResponseOutputItem> {
     let mut output = Vec::new();
+
+    output.push(ResponseOutputItem::Message {
+        id: "msg_0".to_string(),
+        role: "assistant".to_string(),
+        content: vec![ResponseOutputText {
+            kind: "output_text".to_string(),
+            text: output_text.to_string(),
+        }],
+    });
 
     let has_reasoning_text = reasoning.as_ref().is_some_and(|value| !value.trim().is_empty());
     let reasoning_content = reasoning_details.unwrap_or_default();
@@ -556,7 +605,7 @@ fn build_output_items(
             .map(|text| vec![ResponseReasoningSummary { text }])
             .unwrap_or_default();
         output.push(ResponseOutputItem::Reasoning {
-            id: format!("rs_{}", response_id),
+            id: "rs_0".to_string(),
             summary,
             content: reasoning_content,
         });
@@ -571,12 +620,6 @@ fn build_output_items(
                 arguments: call.function.arguments,
             });
         }
-    } else {
-        output.push(ResponseOutputItem::Message {
-            id: format!("msg_{}", response_id),
-            role: "assistant".to_string(),
-            content: vec![ResponseOutputText { text: output_text.to_string() }],
-        });
     }
 
     output
@@ -739,8 +782,9 @@ impl ExecutionEngine {
             ));
         }
 
-        let tool_calls =
-            parse_tool_call(&context.output_text, &context.request_id).map(|call| vec![call]);
+        let tool_calls = context.tool_calls.clone().or_else(|| {
+            parse_tool_call(&context.output_text, &context.request_id).map(|call| vec![call])
+        });
         let finish_reason =
             if tool_calls.is_some() { "tool_calls".to_string() } else { "stop".to_string() };
         let output = build_output_items(
@@ -947,17 +991,22 @@ mod tests {
         async fn generate(
             &self,
             _model: &str,
-            input: &str,
+            input: &ResponsesInput,
             _reasoning: Option<&ReasoningConfig>,
+            _tools: Option<&[serde_json::Value]>,
+            _tool_choice: Option<&serde_json::Value>,
         ) -> Result<ProviderOutcome, CoreError> {
+            let input_text = input.to_canonical_text();
             match self.behavior {
                 ProviderBehavior::Success => {
-                    let chunks = vec!["hello ".to_string(), input.to_string()];
+                    let chunks = vec!["hello ".to_string(), input_text];
                     Ok(ProviderOutcome {
                         output_tokens: 2,
                         chunks,
                         reasoning: None,
                         reasoning_details: None,
+                        tool_calls: None,
+                        emitted_live: false,
                     })
                 }
                 ProviderBehavior::Fail => Err(CoreError::Provider("provider failed".to_string())),
@@ -1057,9 +1106,11 @@ mod tests {
         let engine = build_engine(&fixture);
         let request = ResponsesRequest {
             model: fixture.model.to_string(),
-            input: fixture.input.to_string(),
+            input: xrouter_contracts::ResponsesInput::Text(fixture.input.to_string()),
             stream: false,
             reasoning: None,
+            tools: None,
+            tool_choice: None,
         };
         let result = engine.execute_with_disconnect(request, disconnect).await;
         let actual_snapshot = render_result(result);

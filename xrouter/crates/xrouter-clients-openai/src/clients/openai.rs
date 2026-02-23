@@ -1,0 +1,82 @@
+use async_trait::async_trait;
+use reqwest::Client;
+use serde_json::{Value, json};
+use tokio::sync::mpsc;
+use xrouter_contracts::{ReasoningConfig, ResponseEvent, ResponsesInput};
+use xrouter_core::{CoreError, ProviderClient, ProviderOutcome};
+
+use crate::{HttpRuntime, base_chat_payload};
+
+pub struct OpenAiClient {
+    runtime: HttpRuntime,
+}
+
+impl OpenAiClient {
+    pub fn new(
+        provider_id: String,
+        base_url: Option<String>,
+        api_key: Option<String>,
+        http_client: Option<Client>,
+        max_inflight: Option<usize>,
+    ) -> Self {
+        Self {
+            runtime: HttpRuntime::new(provider_id, base_url, api_key, http_client, max_inflight),
+        }
+    }
+}
+
+#[async_trait]
+impl ProviderClient for OpenAiClient {
+    async fn generate(
+        &self,
+        model: &str,
+        input: &ResponsesInput,
+        reasoning: Option<&ReasoningConfig>,
+        tools: Option<&[Value]>,
+        tool_choice: Option<&Value>,
+    ) -> Result<ProviderOutcome, CoreError> {
+        let url = self.runtime.build_url("chat/completions")?;
+        let payload = build_openai_payload(model, input, reasoning, tools, tool_choice);
+        self.runtime.post_chat_completions_stream("request", &url, &payload, None, &[], None).await
+    }
+
+    async fn generate_stream(
+        &self,
+        request_id: &str,
+        model: &str,
+        input: &ResponsesInput,
+        reasoning: Option<&ReasoningConfig>,
+        tools: Option<&[Value]>,
+        tool_choice: Option<&Value>,
+        sender: Option<&mpsc::Sender<Result<ResponseEvent, CoreError>>>,
+    ) -> Result<ProviderOutcome, CoreError> {
+        let url = self.runtime.build_url("chat/completions")?;
+        let payload = build_openai_payload(model, input, reasoning, tools, tool_choice);
+        self.runtime
+            .post_chat_completions_stream(request_id, &url, &payload, None, &[], sender)
+            .await
+    }
+}
+
+pub(crate) fn build_openai_payload(
+    model: &str,
+    input: &ResponsesInput,
+    reasoning: Option<&ReasoningConfig>,
+    tools: Option<&[Value]>,
+    tool_choice: Option<&Value>,
+) -> Value {
+    let mut payload = base_chat_payload(model, input, tools, tool_choice);
+    if let Some(reasoning_cfg) = normalize_openai_reasoning(reasoning) {
+        payload.insert("reasoning".to_string(), reasoning_cfg);
+    }
+    Value::Object(payload)
+}
+
+fn normalize_openai_reasoning(reasoning: Option<&ReasoningConfig>) -> Option<Value> {
+    let effort = reasoning?.effort.as_deref()?.trim();
+    if effort.is_empty() {
+        return None;
+    }
+    let mapped = if effort.eq_ignore_ascii_case("xhigh") { "high" } else { effort };
+    Some(json!({ "effort": mapped }))
+}

@@ -8,7 +8,8 @@ use std::{
 
 use axum::{
     Json, Router,
-    extract::State,
+    body::Bytes,
+    extract::{MatchedPath, State},
     response::{IntoResponse, Response, Sse, sse::Event},
     routing::{get, post},
 };
@@ -1150,9 +1151,33 @@ async fn get_xrouter_models(State(state): State<AppState>) -> Json<XrouterModels
 )]
 async fn post_responses(
     State(state): State<AppState>,
-    Json(mut request): Json<ResponsesRequest>,
+    matched_path: Option<MatchedPath>,
+    request_body: Bytes,
 ) -> Response {
     let started_at = Instant::now();
+    let route = matched_path.as_ref().map_or("/api/v1/responses", MatchedPath::as_str).to_string();
+    let mut request: ResponsesRequest = match serde_json::from_slice(&request_body) {
+        Ok(request) => request,
+        Err(err) => {
+            info!(
+                event = "http.request.invalid_json",
+                route = route,
+                body_bytes = request_body.len(),
+                error = %err
+            );
+            debug!(
+                event = "http.request.invalid_json.payload",
+                route = route,
+                payload_preview = %preview_request_body(&request_body)
+            );
+            return (
+                axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+                Json(ErrorResponse { error: "invalid request body".to_string() }),
+            )
+                .into_response();
+        }
+    };
+    let normalized_input = request.input.to_canonical_text();
     let request_model = request.model.clone();
     let provider = state.resolve_provider_key(&request.model);
     let provider_model = state.resolve_provider_model_id(&request.model);
@@ -1160,18 +1185,18 @@ async fn post_responses(
     request.model = provider_model;
     info!(
         event = "http.request.received",
-        route = "/api/v1/responses",
+        route = route,
         model = %public_model_id,
         provider = %provider,
         stream = request.stream,
-        input_chars = request.input.len()
+        input_chars = normalized_input.len()
     );
     debug!(
         event = "http.request.payload",
-        route = "/api/v1/responses",
+        route = route,
         model = %request_model,
         provider = %provider,
-        request_text = %request.input
+        request_text = %normalized_input
     );
 
     let engine = match state.resolve_engine(&request.model) {
@@ -1179,7 +1204,7 @@ async fn post_responses(
         Err(err) => {
             warn!(
                 event = "http.request.failed",
-                route = "/api/v1/responses",
+                route = route,
                 model = %public_model_id,
                 provider = %provider,
                 stream = request.stream,
@@ -1191,10 +1216,12 @@ async fn post_responses(
     };
 
     if request.stream {
+        let stream_route = route.clone();
         let response_id = new_prefixed_id("resp_");
+        let stream_item_id = "msg_0".to_string();
         info!(
             event = "http.stream.started",
-            route = "/api/v1/responses",
+            route = route,
             response_id = %response_id,
             model = %public_model_id,
             provider = %provider
@@ -1209,93 +1236,139 @@ async fn post_responses(
                 "output": []
             }
         });
-
-        let stream = engine.execute_stream(request, None).map(move |event| match event {
-            Ok(ResponseEvent::OutputTextDelta { delta, .. }) => Ok::<Event, Infallible>(
-                Event::default().event("response.output_text.delta").data(
-                    json!({
-                        "type": "response.output_text.delta",
-                        "output_index": 0,
-                        "item_id": "msg_0",
-                        "content_index": 0,
-                        "delta": delta
-                    })
-                    .to_string(),
-                ),
-            ),
-            Ok(ResponseEvent::ReasoningDelta { delta, .. }) => Ok::<Event, Infallible>(
-                Event::default().event("response.reasoning.delta").data(
-                    json!({
-                        "type": "response.reasoning.delta",
-                        "delta": delta
-                    })
-                    .to_string(),
-                ),
-            ),
-            Ok(ResponseEvent::ResponseCompleted { output, finish_reason, usage, .. }) => {
-                let reasoning = extract_reasoning_from_output(&output);
-                info!(
-                    event = "http.stream.completed",
-                    route = "/api/v1/responses",
-                    response_id = %response_id,
-                    provider = %provider,
-                    finish_reason = %finish_reason,
-                    reasoning_present = reasoning.is_some(),
-                    reasoning_chars = reasoning.as_ref().map(|it| it.len()).unwrap_or(0),
-                    input_tokens = usage.input_tokens,
-                    output_tokens = usage.output_tokens,
-                    total_tokens = usage.total_tokens,
-                    duration_ms = started_at.elapsed().as_millis() as u64
-                );
-                Ok(Event::default().event("response.completed").data(
-                    json!({
-                        "type": "response.completed",
-                        "response": {
-                            "id": response_id,
-                            "status": "completed",
-                            "output": output,
-                            "finish_reason": finish_reason,
-                            "usage": {
-                                "input_tokens": usage.input_tokens,
-                                "output_tokens": usage.output_tokens,
-                                "total_tokens": usage.total_tokens
-                            }
-                        }
-                    })
-                    .to_string(),
-                ))
+        let output_item_added = json!({
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "id": stream_item_id,
+                "type": "message",
+                "role": "assistant",
+                "content": []
             }
-            Ok(ResponseEvent::ResponseError { message, .. }) => {
-                warn!(
-                    event = "http.stream.failed",
-                    route = "/api/v1/responses",
-                    response_id = %response_id,
-                    provider = %provider,
-                    duration_ms = started_at.elapsed().as_millis() as u64,
-                    error = %message
-                );
-                Ok(Event::default()
-                    .event("response.error")
-                    .data(json!({"type": "response.error", "error": message}).to_string()))
-            }
-            Err(error) => {
-                warn!(
-                    event = "http.stream.failed",
-                    route = "/api/v1/responses",
-                    response_id = %response_id,
-                    provider = %provider,
-                    duration_ms = started_at.elapsed().as_millis() as u64,
-                    error = %error
-                );
-                Ok(Event::default().event("response.error").data(
-                    json!({"type": "response.error", "error": error.to_string()}).to_string(),
-                ))
+        });
+        let content_part_added = json!({
+            "type": "response.content_part.added",
+            "output_index": 0,
+            "item_id": stream_item_id,
+            "content_index": 0,
+            "part": {
+                "type": "output_text",
+                "text": ""
             }
         });
 
-        let bootstrap = futures::stream::iter(vec![Ok::<Event, Infallible>(
-            Event::default().event("response.created").data(created.to_string()),
-        )]);
+        let stream = engine.execute_stream(request, None).flat_map(move |event| {
+            let mut events = Vec::<Result<Event, Infallible>>::new();
+            match event {
+                Ok(ResponseEvent::OutputTextDelta { delta, .. }) => {
+                    events.push(Ok(Event::default().event("response.output_text.delta").data(
+                        json!({
+                            "type": "response.output_text.delta",
+                            "output_index": 0,
+                            "item_id": "msg_0",
+                            "content_index": 0,
+                            "delta": delta
+                        })
+                        .to_string(),
+                    )));
+                }
+                Ok(ResponseEvent::ReasoningDelta { delta, .. }) => {
+                    events.push(Ok(Event::default().event("response.reasoning.delta").data(
+                        json!({
+                            "type": "response.reasoning.delta",
+                            "delta": delta
+                        })
+                        .to_string(),
+                    )));
+                }
+                Ok(ResponseEvent::ResponseCompleted { output, finish_reason, usage, .. }) => {
+                    let reasoning = extract_reasoning_from_output(&output);
+                    info!(
+                        event = "http.stream.completed",
+                        route = stream_route,
+                        response_id = %response_id,
+                        provider = %provider,
+                        finish_reason = %finish_reason,
+                        reasoning_present = reasoning.is_some(),
+                        reasoning_chars = reasoning.as_ref().map(|it| it.len()).unwrap_or(0),
+                        input_tokens = usage.input_tokens,
+                        output_tokens = usage.output_tokens,
+                        total_tokens = usage.total_tokens,
+                        duration_ms = started_at.elapsed().as_millis() as u64
+                    );
+                    for (output_index, item) in output.iter().enumerate() {
+                        events.push(Ok(Event::default().event("response.output_item.done").data(
+                            json!({
+                                "type": "response.output_item.done",
+                                "output_index": output_index,
+                                "item": item
+                            })
+                            .to_string(),
+                        )));
+                    }
+                    events.push(Ok(Event::default().event("response.completed").data(
+                        json!({
+                            "type": "response.completed",
+                            "response": {
+                                "id": response_id,
+                                "status": "completed",
+                                "output": output,
+                                "finish_reason": finish_reason,
+                                "usage": {
+                                    "input_tokens": usage.input_tokens,
+                                    "output_tokens": usage.output_tokens,
+                                    "total_tokens": usage.total_tokens
+                                }
+                            }
+                        })
+                        .to_string(),
+                    )));
+                }
+                Ok(ResponseEvent::ResponseError { message, .. }) => {
+                    warn!(
+                        event = "http.stream.failed",
+                        route = stream_route,
+                        response_id = %response_id,
+                        provider = %provider,
+                        duration_ms = started_at.elapsed().as_millis() as u64,
+                        error = %message
+                    );
+                    events.push(Ok(Event::default()
+                        .event("response.error")
+                        .data(json!({"type": "response.error", "error": message}).to_string())));
+                }
+                Err(error) => {
+                    warn!(
+                        event = "http.stream.failed",
+                        route = stream_route,
+                        response_id = %response_id,
+                        provider = %provider,
+                        duration_ms = started_at.elapsed().as_millis() as u64,
+                        error = %error
+                    );
+                    events.push(Ok(Event::default().event("response.error").data(
+                        json!({"type": "response.error", "error": error.to_string()}).to_string(),
+                    )));
+                }
+            }
+            futures::stream::iter(events)
+        });
+
+        let bootstrap = futures::stream::iter(vec![
+            Ok::<Event, Infallible>(
+                Event::default().event("response.created").data(created.to_string()),
+            ),
+            Ok::<Event, Infallible>(
+                Event::default()
+                    .event("response.output_item.added")
+                    .data(output_item_added.to_string()),
+            ),
+            Ok::<Event, Infallible>(
+                Event::default()
+                    .event("response.content_part.added")
+                    .data(content_part_added.to_string()),
+            ),
+        ]);
         let full_stream = bootstrap.chain(stream);
         return Sse::new(full_stream).into_response();
     }
@@ -1307,14 +1380,14 @@ async fn post_responses(
             let reasoning = extract_reasoning_from_output(&resp.output);
             debug!(
                 event = "http.response.payload",
-                route = "/api/v1/responses",
+                route = route,
                 model = %request_model,
                 provider = %provider,
                 response_text = %response_text
             );
             info!(
                 event = "http.request.succeeded",
-                route = "/api/v1/responses",
+                route = route,
                 model = %request_model,
                 provider = %provider,
                 status = %resp.status,
@@ -1331,7 +1404,7 @@ async fn post_responses(
         Err(err) => {
             warn!(
                 event = "http.request.failed",
-                route = "/api/v1/responses",
+                route = route,
                 model = %request_model,
                 provider = %provider,
                 duration_ms = started_at.elapsed().as_millis() as u64,
@@ -1582,6 +1655,16 @@ fn ensure_id_prefix(id: &str, prefix: &str) -> String {
 
 fn new_prefixed_id(prefix: &str) -> String {
     format!("{prefix}{}", uuid::Uuid::new_v4().simple())
+}
+
+fn preview_request_body(body: &[u8]) -> String {
+    const MAX_PREVIEW_CHARS: usize = 400;
+    let text = String::from_utf8_lossy(body);
+    let mut preview = text.chars().take(MAX_PREVIEW_CHARS).collect::<String>().replace('\n', "\\n");
+    if text.chars().count() > MAX_PREVIEW_CHARS {
+        preview.push_str("...");
+    }
+    preview
 }
 
 fn extract_message_text_from_output(output: &[ResponseOutputItem]) -> String {
@@ -1968,6 +2051,32 @@ json.error=validation failed: input must not be empty
             ),
             (
                 r#"
+name=responses_array_input_message
+method=POST
+path=/api/v1/responses
+body={"model":"deepseek/deepseek-chat","input":[{"role":"user","content":"hi"}],"stream":false}
+"#,
+                r#"
+status=200
+json.status=completed
+json.output_text=[deepseek] user:hi
+json.usage_total=2
+"#,
+            ),
+            (
+                r#"
+name=responses_invalid_json_shape
+method=POST
+path=/api/v1/responses
+body={"model":"deepseek/deepseek-chat","input":[1],"stream":false}
+"#,
+                r#"
+status=422
+json.error=invalid request body
+"#,
+            ),
+            (
+                r#"
 name=chat_adapter_success
 method=POST
 path=/api/v1/chat/completions
@@ -2245,6 +2354,61 @@ json.first_id=<none>
             .and_then(Value::as_str)
             .unwrap_or("");
         assert!(tool_call_id.starts_with("call_"), "unexpected tool_call id: {tool_call_id}");
+    }
+
+    #[tokio::test]
+    async fn responses_stream_emits_output_item_done_for_function_call() {
+        let app = build_router(test_app_state(false));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/responses")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"model":"deepseek/deepseek-chat","input":"TOOL_CALL:get_weather:{\"location\":\"New York\"}","stream":true}"#,
+                    ))
+                    .expect("request must build"),
+            )
+            .await
+            .expect("request must complete");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body read must succeed");
+        let payload = String::from_utf8_lossy(&body);
+        let mut function_call_done = false;
+        for event_block in payload.split("\n\n") {
+            if !event_block.contains("event: response.output_item.done") {
+                continue;
+            }
+            let Some(data_line) = event_block.lines().find(|line| line.starts_with("data: "))
+            else {
+                continue;
+            };
+            let data = data_line.trim_start_matches("data: ");
+            let Ok(value) = serde_json::from_str::<Value>(data) else {
+                continue;
+            };
+            let item_type = value
+                .get("item")
+                .and_then(Value::as_object)
+                .and_then(|item| item.get("type"))
+                .and_then(Value::as_str);
+            if item_type == Some("function_call") {
+                function_call_done = true;
+                break;
+            }
+        }
+        assert!(
+            function_call_done,
+            "expected response.output_item.done with item.type=function_call, payload={payload}"
+        );
+        assert!(
+            payload.contains("event: response.completed"),
+            "stream must end with response.completed"
+        );
     }
 
     #[tokio::test]
