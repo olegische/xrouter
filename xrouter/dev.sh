@@ -6,11 +6,10 @@ cd "$ROOT_DIR"
 
 HOST="${XR_HOST:-127.0.0.1}"
 PORT="${XR_PORT:-8900}"
-BILLING="${XR_BILLING_ENABLED:-false}"
 OPENAI_COMPAT="${ENABLE_OPENAI_COMPATIBLE_API:-false}"
 
 echo "[dev] starting xrouter-app on ${HOST}:${PORT}"
-echo "[dev] XR_BILLING_ENABLED=${BILLING} ENABLE_OPENAI_COMPATIBLE_API=${OPENAI_COMPAT}"
+echo "[dev] ENABLE_OPENAI_COMPATIBLE_API=${OPENAI_COMPAT}"
 
 if [[ -f .env ]]; then
   echo "[dev] using .env from ${ROOT_DIR}/.env"
@@ -25,7 +24,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-XR_HOST="$HOST" XR_PORT="$PORT" XR_BILLING_ENABLED="$BILLING" ENABLE_OPENAI_COMPATIBLE_API="$OPENAI_COMPAT" \
+XR_HOST="$HOST" XR_PORT="$PORT" ENABLE_OPENAI_COMPATIBLE_API="$OPENAI_COMPAT" \
   cargo run -p xrouter-app &
 SERVER_PID=$!
 

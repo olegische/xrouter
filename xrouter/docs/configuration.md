@@ -10,7 +10,6 @@ No required variables for local stub mode.
 
 - `XR_HOST` (default: `127.0.0.1`)
 - `XR_PORT` (default: `3000`)
-- `XR_BILLING_ENABLED` (default: `false`)
 - `ENABLE_OPENAI_COMPATIBLE_API` (default: `false`)
   - `false`: xrouter/openrouter-style access points (`/api/v1/...`)
   - `true`: OpenAI-compatible access points (`/v1/...`)

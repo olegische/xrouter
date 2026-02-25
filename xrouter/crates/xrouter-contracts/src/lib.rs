@@ -9,9 +9,7 @@ use utoipa::ToSchema;
 pub enum StageName {
     Ingest,
     Tokenize,
-    Hold,
     Generate,
-    Finalize,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]

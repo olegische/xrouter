@@ -28,8 +28,6 @@ use xrouter_clients_openai::{
     DeepSeekClient, GigachatClient, MockProviderClient, OpenAiClient, OpenRouterClient,
     YandexResponsesClient, ZaiClient, build_http_client, build_http_client_insecure_tls,
 };
-#[cfg(feature = "billing")]
-use xrouter_clients_usage::InMemoryUsageClient;
 use xrouter_contracts::{
     ChatCompletionsRequest, ChatCompletionsResponse, ResponseEvent, ResponseOutputItem,
     ResponsesRequest, ResponsesResponse,
@@ -81,22 +79,10 @@ struct ModelPerRequestLimits {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-struct ModelPricing {
-    prompt: String,
-    completion: String,
-    request: String,
-    image: String,
-    web_search: String,
-    internal_reasoning: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 struct XrouterModelEntry {
     id: String,
     name: String,
     description: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pricing: Option<ModelPricing>,
     context_length: u32,
     architecture: ModelArchitecture,
     top_provider: ModelTopProvider,
@@ -128,7 +114,6 @@ struct ErrorResponse {
             ModelArchitecture,
             ModelTopProvider,
             ModelPerRequestLimits,
-            ModelPricing,
             XrouterModelEntry,
             XrouterModelsResponse,
             ResponsesRequest,
@@ -684,7 +669,6 @@ fn yandex_fallback_model_descriptor(id: &str) -> ModelDescriptor {
 #[derive(Clone)]
 pub struct AppState {
     openai_compatible_api: bool,
-    billing_enabled: bool,
     default_provider: String,
     models: Vec<ModelDescriptor>,
     engines: HashMap<String, Arc<ExecutionEngine>>,
@@ -761,14 +745,7 @@ impl AppState {
                     )),
                 }
             };
-            #[cfg(feature = "billing")]
-            let engine = Arc::new(ExecutionEngine::new(
-                client,
-                Arc::new(InMemoryUsageClient::default()),
-                false,
-            ));
-            #[cfg(not(feature = "billing"))]
-            let engine = Arc::new(ExecutionEngine::new(client, false));
+            let engine = Arc::new(ExecutionEngine::new(client));
             engines.insert(provider.to_string(), engine);
         }
         info!(event = "app.engines.initialized", engine_count = engines.len());
@@ -951,14 +928,13 @@ impl AppState {
 
         Self {
             openai_compatible_api: config.openai_compatible_api,
-            billing_enabled: config.billing_enabled,
             default_provider,
             models,
             engines,
         }
     }
 
-    pub fn new(_billing_enabled: bool) -> Self {
+    pub fn new() -> Self {
         Self::from_config(&config::AppConfig::for_tests())
     }
 
@@ -995,6 +971,12 @@ impl AppState {
         self.engines.get(&key).cloned().ok_or_else(|| {
             CoreError::Validation(format!("unsupported provider for model: {model}"))
         })
+    }
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -1105,14 +1087,6 @@ async fn get_xrouter_models(State(state): State<AppState>) -> Json<XrouterModels
             id: synthesize_model_id(&m.provider, &m.id),
             name: synthesize_model_id(&m.provider, &m.id),
             description: m.description.clone(),
-            pricing: state.billing_enabled.then(|| ModelPricing {
-                prompt: "0".to_string(),
-                completion: "0".to_string(),
-                request: "0".to_string(),
-                image: "0".to_string(),
-                web_search: "0".to_string(),
-                internal_reasoning: "0".to_string(),
-            }),
             context_length: m.context_length,
             architecture: ModelArchitecture {
                 tokenizer: m.tokenizer.clone(),
@@ -1638,7 +1612,7 @@ fn error_response(err: CoreError) -> Response {
         CoreError::Validation(_) | CoreError::Provider(_) => {
             warn!(event = "http.error_response", error = %err);
         }
-        CoreError::Billing(_) | CoreError::ClientDisconnected(_) => {
+        CoreError::ClientDisconnected(_) => {
             error!(event = "http.error_response", error = %err);
         }
     }
@@ -2183,57 +2157,6 @@ json.data_len=0
 json.first_id=<none>
 "#,
         );
-    }
-
-    #[tokio::test]
-    async fn models_response_omits_pricing_when_billing_disabled() {
-        let app = build_router(test_app_state(false));
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri("/api/v1/models")
-                    .body(Body::empty())
-                    .expect("request must build"),
-            )
-            .await
-            .expect("request must complete");
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("response body read must succeed");
-        let payload: Value =
-            serde_json::from_slice(&body).expect("response body must be valid json");
-        let first = payload["data"][0].as_object().expect("first model must be object");
-        assert!(!first.contains_key("pricing"));
-    }
-
-    #[tokio::test]
-    async fn models_response_includes_pricing_when_billing_enabled() {
-        let mut config = crate::config::AppConfig::for_tests();
-        config.billing_enabled = true;
-        let app = build_router(AppState::from_config(&config));
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri("/api/v1/models")
-                    .body(Body::empty())
-                    .expect("request must build"),
-            )
-            .await
-            .expect("request must complete");
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("response body read must succeed");
-        let payload: Value =
-            serde_json::from_slice(&body).expect("response body must be valid json");
-        let pricing = &payload["data"][0]["pricing"];
-        assert_eq!(pricing["prompt"], "0");
-        assert_eq!(pricing["completion"], "0");
     }
 
     #[tokio::test]

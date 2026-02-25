@@ -17,8 +17,6 @@ pub enum CoreError {
     Validation(String),
     #[error("provider error: {0}")]
     Provider(String),
-    #[error("billing error: {0}")]
-    Billing(String),
     #[error("client disconnected during {0:?}")]
     ClientDisconnected(StageName),
 }
@@ -28,9 +26,7 @@ pub enum KernelState {
     Idle,
     Ingest,
     Tokenize,
-    Hold,
     Generate,
-    Finalize,
     Done,
     Failed,
 }
@@ -39,15 +35,7 @@ pub enum KernelState {
 pub struct ExecutionContext {
     pub request_id: String,
     pub state: KernelState,
-    pub billing_enabled: bool,
-    pub hold_acquired: bool,
-    pub hold_released: bool,
-    pub charge_committed: bool,
-    pub charge_recovery_required: bool,
-    pub recovered_externally: bool,
     pub client_connected: bool,
-    pub billable_tokens: u32,
-    pub external_ledger: u32,
     pub response_completed: bool,
     pub model: String,
     pub request_input: ResponsesInput,
@@ -64,21 +52,13 @@ pub struct ExecutionContext {
 }
 
 impl ExecutionContext {
-    fn new(request: ResponsesRequest, billing_enabled: bool) -> Self {
+    fn new(request: ResponsesRequest) -> Self {
         let request_input = request.input.clone();
         let input = request_input.to_canonical_text();
         Self {
             request_id: Uuid::new_v4().to_string(),
             state: KernelState::Ingest,
-            billing_enabled,
-            hold_acquired: false,
-            hold_released: false,
-            charge_committed: false,
-            charge_recovery_required: false,
-            recovered_externally: false,
             client_connected: true,
-            billable_tokens: 0,
-            external_ledger: 0,
             response_completed: false,
             model: request.model,
             request_input,
@@ -330,25 +310,6 @@ pub struct ProviderGenerateStreamRequest<'a> {
     pub sender: Option<&'a mpsc::Sender<Result<ResponseEvent, CoreError>>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FinalizeResult {
-    Committed,
-    AlreadyCommitted,
-    RecoveryRequired,
-    RecoveredExternally,
-}
-
-#[cfg(feature = "billing")]
-#[async_trait]
-pub trait UsageClient: Send + Sync {
-    async fn acquire_hold(&self, request_id: &str, expected_tokens: u32) -> Result<(), CoreError>;
-    async fn finalize_charge(
-        &self,
-        request_id: &str,
-        billable_tokens: u32,
-    ) -> Result<FinalizeResult, CoreError>;
-}
-
 #[async_trait]
 pub trait StageHandler: Send + Sync {
     fn stage(&self) -> StageName;
@@ -382,27 +343,6 @@ impl StageHandler for TokenizeHandler {
 
     async fn handle(&self, context: &mut ExecutionContext) -> Result<(), CoreError> {
         context.input_tokens = context.input.split_whitespace().count() as u32;
-        context.state =
-            if context.billing_enabled { KernelState::Hold } else { KernelState::Generate };
-        Ok(())
-    }
-}
-
-#[cfg(feature = "billing")]
-struct HoldHandler {
-    usage_client: Arc<dyn UsageClient>,
-}
-
-#[cfg(feature = "billing")]
-#[async_trait]
-impl StageHandler for HoldHandler {
-    fn stage(&self) -> StageName {
-        StageName::Hold
-    }
-
-    async fn handle(&self, context: &mut ExecutionContext) -> Result<(), CoreError> {
-        self.usage_client.acquire_hold(&context.request_id, context.input_tokens).await?;
-        context.hold_acquired = true;
         context.state = KernelState::Generate;
         Ok(())
     }
@@ -420,12 +360,6 @@ impl StageHandler for GenerateHandler {
     }
 
     async fn handle(&self, context: &mut ExecutionContext) -> Result<(), CoreError> {
-        if context.billing_enabled && !context.hold_acquired {
-            return Err(CoreError::Billing(
-                "billing enabled generate path requires acquired hold".to_string(),
-            ));
-        }
-
         info!(
             event = "provider.request.started",
             provider_model = %context.model,
@@ -467,7 +401,6 @@ impl StageHandler for GenerateHandler {
         );
 
         context.output_tokens = result.output_tokens;
-        context.billable_tokens = result.output_tokens;
         context.tool_calls = result.tool_calls;
         context.reasoning = result.reasoning;
         context.reasoning_details = result.reasoning_details;
@@ -497,66 +430,14 @@ impl StageHandler for GenerateHandler {
             }
         }
 
-        context.state = if context.billing_enabled {
-            KernelState::Finalize
-        } else {
-            context.response_completed = true;
-            KernelState::Done
-        };
-        Ok(())
-    }
-}
-
-#[cfg(feature = "billing")]
-struct FinalizeHandler {
-    usage_client: Arc<dyn UsageClient>,
-}
-
-#[cfg(feature = "billing")]
-#[async_trait]
-impl StageHandler for FinalizeHandler {
-    fn stage(&self) -> StageName {
-        StageName::Finalize
-    }
-
-    async fn handle(&self, context: &mut ExecutionContext) -> Result<(), CoreError> {
-        if !context.hold_acquired {
-            return Err(CoreError::Billing("finalize requires an acquired hold".to_string()));
-        }
-
-        match self
-            .usage_client
-            .finalize_charge(&context.request_id, context.billable_tokens)
-            .await?
-        {
-            FinalizeResult::Committed | FinalizeResult::AlreadyCommitted => {
-                context.charge_committed = context.billable_tokens > 0;
-                context.external_ledger =
-                    context.external_ledger.saturating_add(context.billable_tokens);
-            }
-            FinalizeResult::RecoveryRequired => {
-                context.charge_recovery_required = context.billable_tokens > 0;
-            }
-            FinalizeResult::RecoveredExternally => {
-                context.recovered_externally = context.billable_tokens > 0;
-            }
-        }
-
-        context.hold_acquired = false;
-        context.hold_released = true;
-        context.response_completed = context.charge_committed || context.billable_tokens == 0;
-        context.state =
-            if context.response_completed { KernelState::Done } else { KernelState::Failed };
-
+        context.response_completed = true;
+        context.state = KernelState::Done;
         Ok(())
     }
 }
 
 pub struct ExecutionEngine {
     provider: Arc<dyn ProviderClient>,
-    #[cfg(feature = "billing")]
-    usage_client: Arc<dyn UsageClient>,
-    billing_enabled: bool,
 }
 
 fn tool_call_id_from_response_id(response_id: &str) -> String {
@@ -634,19 +515,8 @@ fn build_output_items(
 }
 
 impl ExecutionEngine {
-    #[cfg(feature = "billing")]
-    pub fn new(
-        provider: Arc<dyn ProviderClient>,
-        usage_client: Arc<dyn UsageClient>,
-        billing_enabled: bool,
-    ) -> Self {
-        Self { provider, usage_client, billing_enabled }
-    }
-
-    #[cfg(not(feature = "billing"))]
-    pub fn new(provider: Arc<dyn ProviderClient>, billing_enabled: bool) -> Self {
-        let _ = billing_enabled;
-        Self { provider, billing_enabled: false }
+    pub fn new(provider: Arc<dyn ProviderClient>) -> Self {
+        Self { provider }
     }
 
     pub async fn execute(&self, request: ResponsesRequest) -> Result<ResponsesResponse, CoreError> {
@@ -691,12 +561,11 @@ impl ExecutionEngine {
         sender: Option<mpsc::Sender<Result<ResponseEvent, CoreError>>>,
     ) -> Result<ResponsesResponse, CoreError> {
         let request_started_at = Instant::now();
-        let mut context = ExecutionContext::new(request, self.billing_enabled);
+        let mut context = ExecutionContext::new(request);
         info!(
             event = "core.request.started",
             request_id = %context.request_id,
             model = %context.model,
-            billing_enabled = context.billing_enabled,
             stream = sender.is_some(),
             input_chars = context.input.len()
         );
@@ -727,22 +596,6 @@ impl ExecutionEngine {
             return Err(error);
         }
 
-        #[cfg(feature = "billing")]
-        if context.billing_enabled {
-            let hold = HoldHandler { usage_client: Arc::clone(&self.usage_client) };
-            if let Err(error) = self.run_stage(&hold, &mut context, disconnect_at.as_ref()).await {
-                warn!(
-                    event = "core.request.failed",
-                    request_id = %context.request_id,
-                    model = %context.model,
-                    stage = "hold",
-                    duration_ms = request_started_at.elapsed().as_millis() as u64,
-                    error = %error
-                );
-                return Err(error);
-            }
-        }
-
         let generate =
             GenerateHandler { provider: Arc::clone(&self.provider), sender: sender.clone() };
         if let Err(error) = self.run_stage(&generate, &mut context, disconnect_at.as_ref()).await {
@@ -757,24 +610,6 @@ impl ExecutionEngine {
             return Err(error);
         }
 
-        #[cfg(feature = "billing")]
-        if context.billing_enabled {
-            let finalize = FinalizeHandler { usage_client: Arc::clone(&self.usage_client) };
-            if let Err(error) =
-                self.run_stage(&finalize, &mut context, disconnect_at.as_ref()).await
-            {
-                warn!(
-                    event = "core.request.failed",
-                    request_id = %context.request_id,
-                    model = %context.model,
-                    stage = "finalize",
-                    duration_ms = request_started_at.elapsed().as_millis() as u64,
-                    error = %error
-                );
-                return Err(error);
-            }
-        }
-
         if context.state != KernelState::Done {
             context.state = KernelState::Failed;
             error!(
@@ -783,10 +618,10 @@ impl ExecutionEngine {
                 model = %context.model,
                 stage = "terminal",
                 duration_ms = request_started_at.elapsed().as_millis() as u64,
-                error = "terminal state reached without successful settlement"
+                error = "terminal state reached without completion"
             );
-            return Err(CoreError::Billing(
-                "terminal state reached without successful settlement".to_string(),
+            return Err(CoreError::Validation(
+                "terminal state reached without completion".to_string(),
             ));
         }
 
@@ -856,7 +691,6 @@ impl ExecutionEngine {
             "pipeline_stage",
             request_id = %context.request_id,
             stage = ?stage,
-            billing_enabled = context.billing_enabled,
             model = %context.model
         );
 
@@ -866,16 +700,15 @@ impl ExecutionEngine {
             if disconnect_at == Some(&stage) {
                 context.client_connected = false;
                 match stage {
-                    StageName::Ingest | StageName::Tokenize | StageName::Hold => {
+                    StageName::Ingest | StageName::Tokenize => {
                         context.state = KernelState::Failed;
-                        context.hold_acquired = false;
                         warn!(
                             event = "pipeline.stage.disconnected",
                             duration_ms = stage_started_at.elapsed().as_millis() as u64
                         );
                         return Err(CoreError::ClientDisconnected(stage));
                     }
-                    StageName::Generate | StageName::Finalize => {}
+                    StageName::Generate => {}
                 }
             }
 
@@ -917,8 +750,6 @@ mod tests {
         input: &'a str,
         provider: ProviderBehavior,
         disconnect: Option<StageName>,
-        billing_enabled: bool,
-        finalize_result: FinalizeResult,
     }
 
     impl<'a> CoreFixture<'a> {
@@ -929,8 +760,6 @@ mod tests {
                 input: "world",
                 provider: ProviderBehavior::Success,
                 disconnect: None,
-                billing_enabled: false,
-                finalize_result: FinalizeResult::Committed,
             };
 
             for line in raw.lines() {
@@ -960,26 +789,8 @@ mod tests {
                             "none" => None,
                             "ingest" => Some(StageName::Ingest),
                             "tokenize" => Some(StageName::Tokenize),
-                            "hold" => Some(StageName::Hold),
                             "generate" => Some(StageName::Generate),
-                            "finalize" => Some(StageName::Finalize),
                             other => panic!("unsupported disconnect fixture value: {other}"),
-                        }
-                    }
-                    "billing_enabled" => {
-                        fixture.billing_enabled = match value {
-                            "true" => true,
-                            "false" => false,
-                            other => panic!("unsupported billing_enabled fixture value: {other}"),
-                        }
-                    }
-                    "finalize" => {
-                        fixture.finalize_result = match value {
-                            "committed" => FinalizeResult::Committed,
-                            "already_committed" => FinalizeResult::AlreadyCommitted,
-                            "recovery_required" => FinalizeResult::RecoveryRequired,
-                            "recovered_externally" => FinalizeResult::RecoveredExternally,
-                            other => panic!("unsupported finalize fixture value: {other}"),
                         }
                     }
                     other => panic!("unsupported fixture key: {other}"),
@@ -1015,31 +826,6 @@ mod tests {
                 }
                 ProviderBehavior::Fail => Err(CoreError::Provider("provider failed".to_string())),
             }
-        }
-    }
-
-    #[cfg(feature = "billing")]
-    struct FakeUsage {
-        finalize_result: FinalizeResult,
-    }
-
-    #[cfg(feature = "billing")]
-    #[async_trait]
-    impl UsageClient for FakeUsage {
-        async fn acquire_hold(
-            &self,
-            _request_id: &str,
-            _expected_tokens: u32,
-        ) -> Result<(), CoreError> {
-            Ok(())
-        }
-
-        async fn finalize_charge(
-            &self,
-            _request_id: &str,
-            _billable_tokens: u32,
-        ) -> Result<FinalizeResult, CoreError> {
-            Ok(self.finalize_result.clone())
         }
     }
 
@@ -1079,7 +865,6 @@ mod tests {
         match error {
             CoreError::Validation(_) => "Validation",
             CoreError::Provider(_) => "Provider",
-            CoreError::Billing(_) => "Billing",
             CoreError::ClientDisconnected(_) => "ClientDisconnected",
         }
     }
@@ -1088,19 +873,8 @@ mod tests {
         Arc::new(FakeProvider { behavior })
     }
 
-    #[cfg(feature = "billing")]
     fn build_engine(fixture: &CoreFixture<'_>) -> ExecutionEngine {
-        ExecutionEngine::new(
-            build_provider(fixture.provider),
-            Arc::new(FakeUsage { finalize_result: fixture.finalize_result.clone() }),
-            fixture.billing_enabled,
-        )
-    }
-
-    #[cfg(not(feature = "billing"))]
-    fn build_engine(fixture: &CoreFixture<'_>) -> ExecutionEngine {
-        let _ = fixture.billing_enabled;
-        ExecutionEngine::new(build_provider(fixture.provider), false)
+        ExecutionEngine::new(build_provider(fixture.provider))
     }
 
     async fn check_fixture(raw_fixture: &str, expected_snapshot: &str) {
@@ -1122,16 +896,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn core_non_billing_fixtures() {
+    async fn core_pipeline_fixtures() {
         let fixtures = [
             (
                 r#"
-name=non_billing_success
+name=success
 model=fake
 input=world
 provider=success
 disconnect=none
-billing_enabled=false
 "#,
                 r#"
 kind=ok
@@ -1147,7 +920,6 @@ model=fake
 input=world
 provider=fail
 disconnect=none
-billing_enabled=false
 "#,
                 r#"
 kind=err
@@ -1162,7 +934,6 @@ model=fake
 input=world
 provider=success
 disconnect=ingest
-billing_enabled=false
 "#,
                 r#"
 kind=err
@@ -1177,57 +948,12 @@ model=fake
 input=world
 provider=success
 disconnect=generate
-billing_enabled=false
 "#,
                 r#"
 kind=ok
 status=completed
 output=hello world
 usage_total=3
-"#,
-            ),
-        ];
-
-        for (fixture, expected) in fixtures {
-            check_fixture(fixture, expected).await;
-        }
-    }
-
-    #[cfg(feature = "billing")]
-    #[tokio::test]
-    async fn core_billing_fixtures() {
-        let fixtures = [
-            (
-                r#"
-name=billing_success_committed
-model=fake
-input=world
-provider=success
-disconnect=none
-billing_enabled=true
-finalize=committed
-"#,
-                r#"
-kind=ok
-status=completed
-output=hello world
-usage_total=3
-"#,
-            ),
-            (
-                r#"
-name=billing_recovery_required_fails
-model=fake
-input=world
-provider=success
-disconnect=none
-billing_enabled=true
-finalize=recovery_required
-"#,
-                r#"
-kind=err
-error_kind=Billing
-error=billing error: terminal state reached without successful settlement
 "#,
             ),
         ];

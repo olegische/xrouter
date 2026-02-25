@@ -32,7 +32,6 @@ model=fake
 input=world
 provider=success
 disconnect=ingest
-billing_enabled=false
 ```
 
 ## Snapshot format
@@ -58,11 +57,10 @@ This keeps snapshots stable and readable while still verifying external behavior
 
 ## Current coverage
 
-- Core pipeline happy path (non-billing).
+- Core pipeline happy path.
 - Core provider failure path.
 - Core disconnect fail-fast in early stages.
 - Core disconnect during `generate` continues to terminal path.
-- Core billing commit and recovery-required outcomes (`billing` feature).
 - App routes:
   - `GET /health`
   - `GET /api/v1/models` in default mode

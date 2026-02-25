@@ -14,7 +14,6 @@ async fn main() {
         event = "app.starting",
         host = %config.host,
         port = config.port,
-        billing_enabled = config.billing_enabled,
         openai_compatible_api = config.openai_compatible_api,
         provider_max_inflight = config.provider_max_inflight
     );

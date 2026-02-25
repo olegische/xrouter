@@ -20,9 +20,6 @@ test:
 run:
     cargo run -p xrouter-app
 
-run-billing:
-    cargo run -p xrouter-app --features billing
-
 dev:
     ./dev.sh
 

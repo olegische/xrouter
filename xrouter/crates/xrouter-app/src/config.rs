@@ -59,7 +59,6 @@ pub struct ProviderConfig {
 pub struct AppConfig {
     pub host: String,
     pub port: u16,
-    pub billing_enabled: bool,
     pub openai_compatible_api: bool,
     pub provider_timeout_seconds: u64,
     pub provider_max_inflight: usize,
@@ -73,8 +72,6 @@ pub struct AppConfig {
 pub enum ConfigError {
     #[error("invalid XR_PORT value: {0}")]
     InvalidPort(String),
-    #[error("invalid XR_BILLING_ENABLED value: {0}")]
-    InvalidBool(String),
     #[error("invalid ENABLE_OPENAI_COMPATIBLE_API value: {0}")]
     InvalidOpenAiCompatibleApiBool(String),
     #[error("invalid XR_PROVIDER_TIMEOUT value: {0}")]
@@ -90,10 +87,6 @@ impl AppConfig {
         let port_raw = env::var("XR_PORT").unwrap_or_else(|_| "3000".to_string());
         let port =
             port_raw.parse::<u16>().map_err(|_| ConfigError::InvalidPort(port_raw.clone()))?;
-
-        let billing_raw = env::var("XR_BILLING_ENABLED").unwrap_or_else(|_| "false".to_string());
-        let billing_enabled = parse_bool(&billing_raw)
-            .ok_or_else(|| ConfigError::InvalidBool(billing_raw.clone()))?;
 
         let openai_compatible_raw =
             env::var("ENABLE_OPENAI_COMPATIBLE_API").unwrap_or_else(|_| "false".to_string());
@@ -133,7 +126,6 @@ impl AppConfig {
         Ok(Self {
             host,
             port,
-            billing_enabled,
             openai_compatible_api,
             provider_timeout_seconds,
             provider_max_inflight,
@@ -148,7 +140,6 @@ impl AppConfig {
         Self {
             host: "127.0.0.1".to_string(),
             port: 3000,
-            billing_enabled: false,
             openai_compatible_api: false,
             provider_timeout_seconds: 15,
             provider_max_inflight: 100,

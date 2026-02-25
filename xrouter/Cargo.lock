@@ -2226,7 +2226,6 @@ dependencies = [
  "utoipa-swagger-ui",
  "uuid",
  "xrouter-clients-openai",
- "xrouter-clients-usage",
  "xrouter-contracts",
  "xrouter-core",
  "xrouter-observability",
@@ -2245,15 +2244,6 @@ dependencies = [
  "tracing",
  "uuid",
  "xrouter-contracts",
- "xrouter-core",
-]
-
-[[package]]
-name = "xrouter-clients-usage"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "tokio",
  "xrouter-core",
 ]
 
