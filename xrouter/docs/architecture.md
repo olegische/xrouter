@@ -17,11 +17,11 @@ xrouter is a Responses-first LLM router with compatibility adapters.
   - `ENABLE_OPENAI_COMPATIBLE_API=true`: OpenAI-compatible paths (`/v1/...`).
 - Core execution model: typed stage pipeline.
 - Provider routing: model/provider resolution in orchestration layer, not in routes.
-- Billing stages are optional and feature-gated.
+- Billing is out of active runtime scope.
 
 Canonical stage sequence:
 
-`ingest -> tokenize -> hold? -> generate -> finalize?`
+`ingest -> tokenize -> generate`
 
 ## Code map
 
@@ -56,13 +56,13 @@ Important types:
 - `ExecutionEngine`
 - `ExecutionContext`
 - `CoreError`
-- `StageHandler` trait and stage handlers (`IngestHandler`, `TokenizeHandler`, `GenerateHandler`, and billing handlers behind feature flag)
-- `ProviderClient` and `UsageClient` traits as core-side boundaries
+- `StageHandler` trait and stage handlers (`IngestHandler`, `TokenizeHandler`, `GenerateHandler`)
+- `ProviderClient` trait as core-side boundary
 
 Boundary intent:
 
 - Core owns lifecycle semantics and stage transitions.
-- Core depends on abstractions (`ProviderClient`, `UsageClient`) only.
+- Core depends on abstractions (`ProviderClient`) only.
 - Core never depends on HTTP route handlers or provider-specific request schemas.
 
 ### `crates/xrouter-clients-openai`
@@ -73,15 +73,6 @@ Boundary intent:
 
 - Provider transport and provider payload behavior belong here.
 - Route layer and core should consume this through `ProviderClient` trait.
-
-### `crates/xrouter-clients-usage`
-
-Role: reusable usage/billing client abstraction implementation.
-
-Boundary intent:
-
-- Billing finalization semantics and idempotency helpers stay here.
-- Enabled in core only when billing feature is turned on.
 
 ### `crates/xrouter-observability`
 
@@ -110,18 +101,14 @@ Boundary intent:
 
 ## Architecture invariants (stable)
 
-### Lifecycle and financial invariants
+### Lifecycle invariants
 
 1. Stage names and ordering are canonical:
-   `ingest -> tokenize -> hold? -> generate -> finalize?`.
-2. `hold` and `finalize` are enabled only when billing integration is on.
-3. Billing path may not generate billable output without acquired hold.
-4. Disconnect behavior:
-   - disconnect in `ingest|tokenize|hold` fails fast,
-   - disconnect in `generate|finalize` does not cancel settlement.
-5. Terminal states may not keep an acquired hold.
-6. Billed terminal outcome must be explicit: commit OR recovery-required OR external recovery.
-7. Finalize path must be idempotency-safe (no double commit).
+   `ingest -> tokenize -> generate`.
+2. Disconnect behavior:
+   - disconnect in `ingest|tokenize` fails fast,
+   - disconnect in `generate` does not cancel the in-flight generation lifecycle.
+3. Response completion is explicit and terminal (`done`).
 
 ### Contract invariants
 
@@ -158,13 +145,28 @@ Boundary intent:
 - Primary style is deterministic scenario tests through public boundaries.
 - Current suites use data-driven fixtures and snapshot-like expected outputs.
 
+## Formal Model Scope
+
+- Active lifecycle contract:
+  - `formal/xrouter.tla`
+  - `formal/xrouter.cfg`
+  - `formal/property-map.md`
+  - `formal/trace-schema.md`
+- Legacy billing reference model (kept for future optional extension work):
+  - `formal/xrouter_billing.tla`
+  - `formal/xrouter_billing.cfg`
+  - `formal/property-map-billing.md`
+  - `formal/trace-schema-billing.md`
+
 ## Change policy
 
-Any change that affects lifecycle or financial semantics must be reflected in:
+Any change that affects active lifecycle semantics must be reflected in:
 
 - `formal/xrouter.tla`
 - `formal/property-map.md`
 - `formal/trace-schema.md`
 - corresponding Rust code/tests in the same change
+
+If billing semantics are intentionally reintroduced, update the legacy billing model set in the same change.
 
 No contract-breaking behavior should be hidden behind silent fallback.

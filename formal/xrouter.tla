@@ -1,247 +1,116 @@
 ---- MODULE xrouter ----
 EXTENDS TLC, Naturals
 
-\* Minimal post-paid formal model for xrouter request flow with streaming:
-\* ingest -> tokenize -> hold? -> generate(stream) -> finalize? -> done
+\* Core non-billing formal model for xrouter request flow with streaming:
+\* ingest -> tokenize -> generate(stream) -> done
 
-CONSTANTS MaxBillableTokens, MaxLedger
+CONSTANT MaxOutputTokens
 
 States ==
-  {"idle", "ingest", "tokenize", "hold", "generate", "finalize", "done", "failed"}
+  {"idle", "ingest", "tokenize", "generate", "done", "failed"}
 
 Actions ==
   {"none", "start",
    "ingest_ok", "ingest_fail",
    "tokenize_ok", "tokenize_fail",
-   "hold_ok", "hold_fail",
    "generate_chunk", "generate_done", "generate_fail",
-   "finalize_ok", "finalize_fail",
-   "recovery_resolved_external",
    "client_disconnect",
    "reset"}
 
 VARIABLES
   kstate,
-  billingEnabled,
-  holdAcquired,
-  holdReleased,
-  chargeCommitted,
-  chargeRecoveryRequired,
-  recoveredExternally,
   clientConnected,
-  billableTokens,
-  externalLedger,
+  outputTokens,
   responseCompleted,
   lastAction
 
 vars ==
   <<kstate,
-    billingEnabled,
-    holdAcquired,
-    holdReleased,
-    chargeCommitted,
-    chargeRecoveryRequired,
-    recoveredExternally,
     clientConnected,
-    billableTokens,
-    externalLedger,
+    outputTokens,
     responseCompleted,
     lastAction>>
 
 Init ==
   /\ kstate = "idle"
-  /\ billingEnabled = FALSE
-  /\ holdAcquired = FALSE
-  /\ holdReleased = FALSE
-  /\ chargeCommitted = FALSE
-  /\ chargeRecoveryRequired = FALSE
-  /\ recoveredExternally = FALSE
   /\ clientConnected = FALSE
-  /\ billableTokens = 0
-  /\ externalLedger = 0
+  /\ outputTokens = 0
   /\ responseCompleted = FALSE
   /\ lastAction = "none"
 
 Start ==
   /\ kstate = "idle"
   /\ kstate' = "ingest"
-  /\ billingEnabled' \in BOOLEAN
-  /\ holdAcquired' = FALSE
-  /\ holdReleased' = FALSE
-  /\ chargeCommitted' = FALSE
-  /\ chargeRecoveryRequired' = FALSE
-  /\ recoveredExternally' = FALSE
   /\ clientConnected' = TRUE
-  /\ billableTokens' = 0
-  /\ externalLedger' = externalLedger
+  /\ outputTokens' = 0
   /\ responseCompleted' = FALSE
   /\ lastAction' = "start"
 
 IngestOK ==
   /\ kstate = "ingest"
   /\ kstate' = "tokenize"
-  /\ UNCHANGED <<billingEnabled, holdAcquired, holdReleased, chargeCommitted, chargeRecoveryRequired, recoveredExternally,
-                 clientConnected, billableTokens, externalLedger, responseCompleted>>
+  /\ UNCHANGED <<clientConnected, outputTokens, responseCompleted>>
   /\ lastAction' = "ingest_ok"
 
 IngestFail ==
   /\ kstate = "ingest"
   /\ kstate' = "failed"
-  /\ UNCHANGED <<billingEnabled, holdAcquired, holdReleased, chargeCommitted, chargeRecoveryRequired, recoveredExternally,
-                 clientConnected, billableTokens, externalLedger, responseCompleted>>
+  /\ responseCompleted' = FALSE
+  /\ UNCHANGED <<clientConnected, outputTokens>>
   /\ lastAction' = "ingest_fail"
 
 TokenizeOK ==
   /\ kstate = "tokenize"
-  /\ kstate' = IF billingEnabled THEN "hold" ELSE "generate"
-  /\ UNCHANGED <<billingEnabled, holdAcquired, holdReleased, chargeCommitted, chargeRecoveryRequired, recoveredExternally,
-                 clientConnected, billableTokens, externalLedger, responseCompleted>>
+  /\ kstate' = "generate"
+  /\ UNCHANGED <<clientConnected, outputTokens, responseCompleted>>
   /\ lastAction' = "tokenize_ok"
 
 TokenizeFail ==
   /\ kstate = "tokenize"
   /\ kstate' = "failed"
-  /\ UNCHANGED <<billingEnabled, holdAcquired, holdReleased, chargeCommitted, chargeRecoveryRequired, recoveredExternally,
-                 clientConnected, billableTokens, externalLedger, responseCompleted>>
+  /\ responseCompleted' = FALSE
+  /\ UNCHANGED <<clientConnected, outputTokens>>
   /\ lastAction' = "tokenize_fail"
-
-HoldOK ==
-  /\ kstate = "hold"
-  /\ billingEnabled
-  /\ kstate' = "generate"
-  /\ holdAcquired' = TRUE
-  /\ holdReleased' = FALSE
-  /\ UNCHANGED <<billingEnabled, chargeCommitted, chargeRecoveryRequired, recoveredExternally,
-                 clientConnected, billableTokens, externalLedger, responseCompleted>>
-  /\ lastAction' = "hold_ok"
-
-HoldFail ==
-  /\ kstate = "hold"
-  /\ billingEnabled
-  /\ kstate' = "failed"
-  /\ holdAcquired' = FALSE
-  /\ holdReleased' = FALSE
-  /\ UNCHANGED <<billingEnabled, chargeCommitted, chargeRecoveryRequired, recoveredExternally,
-                 clientConnected, billableTokens, externalLedger, responseCompleted>>
-  /\ lastAction' = "hold_fail"
 
 GenerateChunk ==
   /\ kstate = "generate"
-  /\ (~billingEnabled) \/ holdAcquired
-  /\ billableTokens < MaxBillableTokens
+  /\ outputTokens < MaxOutputTokens
   /\ kstate' = "generate"
-  /\ billableTokens' = billableTokens + 1
-  /\ UNCHANGED <<billingEnabled, holdAcquired, holdReleased, chargeCommitted, chargeRecoveryRequired, recoveredExternally,
-                 clientConnected, externalLedger, responseCompleted>>
+  /\ outputTokens' = outputTokens + 1
+  /\ UNCHANGED <<clientConnected, responseCompleted>>
   /\ lastAction' = "generate_chunk"
 
 GenerateDone ==
   /\ kstate = "generate"
-  /\ (~billingEnabled) \/ holdAcquired
-  /\ kstate' = IF billingEnabled THEN "finalize" ELSE "done"
-  /\ responseCompleted' = IF billingEnabled THEN FALSE ELSE TRUE
-  /\ UNCHANGED <<billingEnabled, holdAcquired, holdReleased, chargeCommitted, chargeRecoveryRequired, recoveredExternally,
-                 clientConnected, billableTokens, externalLedger>>
+  /\ kstate' = "done"
+  /\ responseCompleted' = TRUE
+  /\ UNCHANGED <<clientConnected, outputTokens>>
   /\ lastAction' = "generate_done"
 
 GenerateFail ==
   /\ kstate = "generate"
-  /\ (~billingEnabled) \/ holdAcquired
-  /\ kstate' = IF billingEnabled /\ billableTokens > 0 THEN "finalize" ELSE "failed"
-  /\ holdAcquired' = IF billingEnabled /\ billableTokens > 0 THEN holdAcquired ELSE FALSE
-  /\ holdReleased' = IF billingEnabled /\ billableTokens > 0
-                      THEN holdReleased
-                      ELSE holdReleased \/ holdAcquired
-  /\ chargeCommitted' = chargeCommitted
-  /\ chargeRecoveryRequired' = IF billingEnabled /\ billableTokens > 0
-                               THEN chargeRecoveryRequired
-                               ELSE FALSE
-  /\ recoveredExternally' = FALSE
+  /\ kstate' = "failed"
   /\ responseCompleted' = FALSE
-  /\ UNCHANGED <<billingEnabled, clientConnected, billableTokens, externalLedger>>
+  /\ UNCHANGED <<clientConnected, outputTokens>>
   /\ lastAction' = "generate_fail"
 
-FinalizeOK ==
-  /\ kstate = "finalize"
-  /\ billingEnabled
-  /\ holdAcquired
-  /\ ~chargeCommitted
-  /\ IF billableTokens > 0
-        THEN externalLedger + billableTokens <= MaxLedger
-        ELSE TRUE
-  /\ kstate' = "done"
-  /\ holdAcquired' = FALSE
-  /\ holdReleased' = TRUE
-  /\ chargeCommitted' = IF billableTokens > 0 THEN TRUE ELSE chargeCommitted
-  /\ chargeRecoveryRequired' = FALSE
-  /\ recoveredExternally' = FALSE
-  /\ externalLedger' = IF billableTokens > 0 THEN externalLedger + billableTokens ELSE externalLedger
-  /\ responseCompleted' = TRUE
-  /\ UNCHANGED <<billingEnabled, clientConnected, billableTokens>>
-  /\ lastAction' = "finalize_ok"
-
-FinalizeFail ==
-  /\ kstate = "finalize"
-  /\ billingEnabled
-  /\ holdAcquired
-  /\ ~chargeCommitted
-  /\ kstate' = "failed"
-  /\ holdAcquired' = FALSE
-  /\ holdReleased' = TRUE
-  /\ chargeCommitted' = FALSE
-  /\ chargeRecoveryRequired' = (billableTokens > 0)
-  /\ recoveredExternally' = FALSE
-  /\ externalLedger' = externalLedger
-  /\ responseCompleted' = FALSE
-  /\ UNCHANGED <<billingEnabled, clientConnected, billableTokens>>
-  /\ lastAction' = "finalize_fail"
-
-RecoveryResolved ==
-  /\ kstate = "failed"
-  /\ chargeRecoveryRequired
-  /\ kstate' = "failed"
-  /\ chargeRecoveryRequired' = FALSE
-  /\ recoveredExternally' = TRUE
-  /\ UNCHANGED <<billingEnabled, holdAcquired, holdReleased, chargeCommitted,
-                 clientConnected, billableTokens, externalLedger, responseCompleted>>
-  /\ lastAction' = "recovery_resolved_external"
-
 ClientDisconnect ==
-  /\ kstate \in {"ingest", "tokenize", "hold", "generate", "finalize"}
+  /\ kstate \in {"ingest", "tokenize", "generate"}
   /\ clientConnected
   /\ clientConnected' = FALSE
-  /\ responseCompleted' = FALSE
-  /\ IF kstate \in {"ingest", "tokenize", "hold"}
+  /\ IF kstate \in {"ingest", "tokenize"}
        THEN /\ kstate' = "failed"
-            /\ holdAcquired' = FALSE
-            /\ holdReleased' = holdReleased
-            /\ chargeCommitted' = chargeCommitted
-            /\ chargeRecoveryRequired' = chargeRecoveryRequired
-            /\ recoveredExternally' = recoveredExternally
-            /\ externalLedger' = externalLedger
-       ELSE /\ kstate' = kstate
-            /\ holdAcquired' = holdAcquired
-            /\ holdReleased' = holdReleased
-            /\ chargeCommitted' = chargeCommitted
-            /\ chargeRecoveryRequired' = chargeRecoveryRequired
-            /\ recoveredExternally' = recoveredExternally
-            /\ externalLedger' = externalLedger
-  /\ UNCHANGED <<billingEnabled, billableTokens>>
+            /\ responseCompleted' = FALSE
+       ELSE /\ kstate' = "generate"
+            /\ responseCompleted' = responseCompleted
+  /\ UNCHANGED <<outputTokens>>
   /\ lastAction' = "client_disconnect"
 
 Reset ==
   /\ kstate \in {"done", "failed"}
-  /\ ~chargeRecoveryRequired
   /\ kstate' = "idle"
-  /\ billingEnabled' = FALSE
-  /\ holdAcquired' = FALSE
-  /\ holdReleased' = FALSE
-  /\ chargeCommitted' = FALSE
-  /\ chargeRecoveryRequired' = FALSE
-  /\ recoveredExternally' = FALSE
   /\ clientConnected' = FALSE
-  /\ billableTokens' = 0
-  /\ externalLedger' = externalLedger
+  /\ outputTokens' = 0
   /\ responseCompleted' = FALSE
   /\ lastAction' = "reset"
 
@@ -251,14 +120,9 @@ Next ==
   \/ IngestFail
   \/ TokenizeOK
   \/ TokenizeFail
-  \/ HoldOK
-  \/ HoldFail
   \/ GenerateChunk
   \/ GenerateDone
   \/ GenerateFail
-  \/ FinalizeOK
-  \/ FinalizeFail
-  \/ RecoveryResolved
   \/ ClientDisconnect
   \/ Reset
 
@@ -266,54 +130,26 @@ Spec ==
   /\ Init
   /\ [][Next]_vars
   /\ WF_vars(GenerateDone \/ GenerateFail)
-  /\ WF_vars(FinalizeOK \/ FinalizeFail)
-  /\ WF_vars(RecoveryResolved)
 
 TypeInv ==
   /\ kstate \in States
-  /\ billingEnabled \in BOOLEAN
-  /\ holdAcquired \in BOOLEAN
-  /\ holdReleased \in BOOLEAN
-  /\ chargeCommitted \in BOOLEAN
-  /\ chargeRecoveryRequired \in BOOLEAN
-  /\ recoveredExternally \in BOOLEAN
   /\ clientConnected \in BOOLEAN
-  /\ billableTokens \in 0..MaxBillableTokens
-  /\ externalLedger \in 0..MaxLedger
+  /\ outputTokens \in 0..MaxOutputTokens
   /\ responseCompleted \in BOOLEAN
   /\ lastAction \in Actions
 
-BillingGateInv ==
-  /\ kstate = "hold" => billingEnabled
-  /\ kstate = "finalize" => /\ billingEnabled /\ holdAcquired
-  /\ billingEnabled /\ kstate = "generate" => holdAcquired
-  /\ holdAcquired => billingEnabled
-  /\ chargeCommitted => /\ billingEnabled /\ holdReleased /\ billableTokens > 0
-  /\ kstate = "done" /\ billingEnabled /\ billableTokens > 0 => chargeCommitted
-  /\ chargeCommitted => externalLedger >= billableTokens
-
-HoldLifecycleInv ==
-  /\ holdReleased => ~holdAcquired
-  /\ kstate \in {"done", "failed"} => ~holdAcquired
-
-NoFreeTokensInv ==
-  /\ billingEnabled /\ billableTokens > 0 /\ kstate = "failed"
-     => chargeCommitted \/ chargeRecoveryRequired \/ recoveredExternally \/ kstate = "finalize"
-  /\ chargeRecoveryRequired => /\ billingEnabled /\ billableTokens > 0 /\ ~chargeCommitted
-  /\ recoveredExternally => /\ billingEnabled /\ billableTokens > 0 /\ ~chargeCommitted /\ ~chargeRecoveryRequired
-  /\ kstate = "idle" => ~chargeRecoveryRequired
-
-DebtProgressLiveness ==
-  []((billingEnabled /\ billableTokens > 0 /\ kstate = "generate")
-    ~> (chargeCommitted \/ chargeRecoveryRequired \/ recoveredExternally))
+FlowInv ==
+  /\ responseCompleted => kstate = "done"
+  /\ kstate = "idle" => outputTokens = 0
 
 StreamingInv ==
-  /\ billableTokens > 0 => kstate \in {"generate", "finalize", "done", "failed"}
-  /\ kstate = "done" => responseCompleted
-  /\ responseCompleted => kstate = "done"
+  /\ outputTokens > 0 => kstate \in {"generate", "done", "failed"}
 
 DisconnectSafetyInv ==
-  /\ kstate \in {"ingest", "tokenize", "hold"} => clientConnected
-  /\ ~clientConnected => kstate \in {"idle", "generate", "finalize", "done", "failed"}
+  /\ kstate \in {"ingest", "tokenize"} => clientConnected
+  /\ ~clientConnected => kstate \in {"idle", "generate", "done", "failed"}
+
+GenerateProgressLiveness ==
+  [](kstate = "generate" ~> (kstate = "done" \/ kstate = "failed"))
 
 =============================================================================

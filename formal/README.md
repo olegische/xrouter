@@ -1,11 +1,17 @@
 # Formal Models
 
-This directory contains the current formal model for xrouter:
+This directory contains the active and legacy formal models for xrouter:
 
-- `formal/xrouter.tla` — TLA+ spec (post-paid billing + streaming lifecycle)
-- `formal/xrouter.cfg` — TLC config (constants + invariants + temporal properties)
-- `formal/property-map.md` — property traceability
-- `formal/trace-schema.md` — event/action mapping
+- Active non-billing model:
+  - `formal/xrouter.tla` — TLA+ spec (`ingest -> tokenize -> generate(stream) -> done|failed`)
+  - `formal/xrouter.cfg` — TLC config (constants + invariants + temporal properties)
+  - `formal/property-map.md` — property traceability
+  - `formal/trace-schema.md` — event/action mapping
+- Legacy billing model (reference for future extension work):
+  - `formal/xrouter_billing.tla`
+  - `formal/xrouter_billing.cfg`
+  - `formal/property-map-billing.md`
+  - `formal/trace-schema-billing.md`
 - `formal/open-formalization-questions.md` — unresolved modeling decisions
 
 ## Requirements

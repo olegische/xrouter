@@ -45,9 +45,9 @@ Lints:
 
 1. Treat the Rust codebase as the source of truth; legacy Python code is reference material only.
 2. Keep request execution as a handler pipeline (Chain of Responsibility), but make handlers explicit and typed.
-3. Use canonical stage names: `ingest -> tokenize -> hold? -> generate -> finalize?`.
+3. Use canonical stage names: `ingest -> tokenize -> generate`.
 4. `ingest` is responsible for normalization and metadata enrichment (not only field remapping).
-5. `hold` and `finalize` are enabled only when billing integration feature flags are on.
+5. Billing stages are out of active runtime scope; keep core flow non-billing.
 6. Do not use stage name `completion` in new Rust core flow; use `generate`.
 7. Replace container-heavy DI with an explicit composition root:
    - configuration loading,
@@ -62,29 +62,23 @@ Lints:
 
 ## Formal Model Contract (Mandatory)
 
-The formal model in `formal/xrouter.tla` is the lifecycle contract for scaffold and implementation.
+The formal model in `formal/xrouter.tla` is the active lifecycle contract for scaffold and implementation.
 
 1. Keep lifecycle semantics aligned with the formal stages:
-   - `ingest -> tokenize -> hold? -> generate(stream) -> finalize? -> done|failed`.
-2. Preserve post-paid settlement behavior:
-   - if billing is enabled and billable tokens were generated, terminal success requires charge commit or explicit recovery path.
+   - `ingest -> tokenize -> generate(stream) -> done|failed`.
+2. Preserve non-billing completion behavior:
+   - terminal success is represented by `done` with completed response semantics.
 3. Preserve disconnect behavior:
-   - disconnect in `ingest|tokenize|hold` fails fast,
-   - disconnect in `generate|finalize` does not cancel settlement.
-4. Preserve hold lifecycle constraints:
-   - no terminal state may retain an acquired hold.
-5. Preserve debt safety constraints:
-   - `reset` is forbidden while `chargeRecoveryRequired = true`.
-6. Preserve finalize commit safety:
-   - finalize path must prevent double commit/idempotency violations.
-7. Preserve financial scope semantics:
-   - `externalLedger` tracks commits performed by this service path,
-   - external debt settlement is represented separately (for example `recoveredExternally`) and must not be silently conflated with local ledger commits.
-8. Any lifecycle or financial semantics change requires:
+   - disconnect in `ingest|tokenize` fails fast,
+   - disconnect in `generate` does not cancel in-flight generation lifecycle.
+4. Any active lifecycle semantics change requires:
    - update of `formal/xrouter.tla`,
    - update of `formal/property-map.md` and `formal/trace-schema.md`,
    - successful TLC run with `formal/xrouter.cfg`,
    - matching code/test updates in the same change.
+5. Legacy billing model is reference-only:
+   - `formal/xrouter_billing.tla`, `formal/xrouter_billing.cfg`,
+   - `formal/property-map-billing.md`, `formal/trace-schema-billing.md`.
 
 ## API Contract Baseline
 
@@ -206,7 +200,6 @@ Any scaffold change must include:
       xrouter-clients-openai/       # reusable OpenAI-compatible client
       xrouter-clients-openrouter/   # reusable OpenRouter client
       xrouter-clients-gigachat/     # reusable GigaChat client
-      xrouter-clients-usage/        # reusable billing/usage client
       xrouter-storage/              # cache/repository adapters
       xrouter-observability/        # logging/tracing/metrics adapters
     # no top-level tests directory by default; co-located tests are preferred
