@@ -27,6 +27,31 @@ Example:
 - `OPENROUTER_API_KEY`
 - `OPENROUTER_BASE_URL`
 
+## Generic OpenAI-compatible upstream via `XROUTER`
+
+Use `XROUTER_*` when you want to connect any OpenAI-compatible provider through the generic
+`xrouter` provider slot.
+
+- `XROUTER_BASE_URL` (example: `https://<provider-host>/v1`)
+- `XROUTER_API_KEY`
+
+Example:
+
+```bash
+cd xrouter
+XROUTER_BASE_URL=https://<provider-host>/v1 \
+XROUTER_API_KEY=... \
+cargo run -p xrouter-app
+```
+
+Model id format for requests:
+
+- `xrouter/<upstream-model-id>`
+
+Example request model:
+
+- `xrouter/gpt-4o-mini`
+
 ## Local run
 
 `xrouter-app` automatically loads `.env` from the workspace root via `dotenvy`.
