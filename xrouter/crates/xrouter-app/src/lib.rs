@@ -26,7 +26,8 @@ use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 use xrouter_clients_openai::{
     DeepSeekClient, GigachatClient, MockProviderClient, OpenAiClient, OpenRouterClient,
-    YandexResponsesClient, ZaiClient, build_http_client, build_http_client_insecure_tls,
+    XrouterClient, YandexResponsesClient, ZaiClient, build_http_client,
+    build_http_client_insecure_tls,
 };
 use xrouter_contracts::{
     ChatCompletionsRequest, ChatCompletionsResponse, ResponseEvent, ResponseOutputItem,
@@ -199,6 +200,41 @@ struct ProviderModelsResponse {
 #[derive(Debug, Deserialize)]
 struct ProviderModelEntry {
     id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct XrouterProviderModelsResponse {
+    #[serde(default)]
+    data: Vec<XrouterProviderModelEntry>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct XrouterProviderModelEntry {
+    id: String,
+    #[serde(default)]
+    context_length: u32,
+    #[serde(default)]
+    max_model_len: u32,
+    #[serde(default)]
+    metadata: XrouterProviderModelMetadata,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct XrouterProviderModelMetadata {
+    #[serde(default)]
+    company: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    endpoints: Vec<XrouterProviderEndpoint>,
+    #[serde(default, rename = "type")]
+    model_type: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct XrouterProviderEndpoint {
+    #[serde(default)]
+    path: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -473,6 +509,95 @@ fn fetch_provider_model_ids(
     }
 }
 
+fn fetch_xrouter_models(
+    provider_config: &config::ProviderConfig,
+    connect_timeout_seconds: u64,
+) -> Option<Vec<ModelDescriptor>> {
+    let base_url = provider_config
+        .base_url
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())?
+        .trim_end_matches('/')
+        .to_string();
+    if base_url.is_empty() {
+        return None;
+    }
+
+    let url = format!("{base_url}/models");
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(connect_timeout_seconds))
+        .build();
+    let mut request = agent.get(url.as_str()).set("Accept", "application/json");
+    if let Some(api_key) = provider_config.api_key.as_deref().filter(|v| !v.trim().is_empty()) {
+        request = request.set("Authorization", &format!("Bearer {api_key}"));
+    }
+
+    match request.call() {
+        Ok(ok) => match ok.into_json::<XrouterProviderModelsResponse>() {
+            Ok(payload) => Some(map_xrouter_models(payload)),
+            Err(err) => {
+                warn!(
+                    event = "xrouter.models.fetch.failed",
+                    reason = "invalid_json",
+                    error = %err
+                );
+                None
+            }
+        },
+        Err(err) => {
+            warn!(event = "xrouter.models.fetch.failed", reason = "request_failed", error = %err);
+            None
+        }
+    }
+}
+
+fn map_xrouter_models(payload: XrouterProviderModelsResponse) -> Vec<ModelDescriptor> {
+    payload
+        .data
+        .into_iter()
+        .filter(xrouter_supports_chat_generation)
+        .map(|model| {
+            let context_length = if model.context_length > 0 {
+                model.context_length
+            } else if model.max_model_len > 0 {
+                model.max_model_len
+            } else {
+                128_000
+            };
+            let company = model.metadata.company.unwrap_or_else(|| "xrouter".to_string());
+            let name = model.metadata.name.unwrap_or_else(|| model.id.clone());
+            let model_type = model.metadata.model_type.unwrap_or_else(|| "llm".to_string());
+
+            ModelDescriptor {
+                id: model.id,
+                provider: "xrouter".to_string(),
+                description: format!("{name} via xrouter ({company})"),
+                context_length,
+                tokenizer: "unknown".to_string(),
+                instruct_type: "none".to_string(),
+                modality: map_xrouter_modality(&model_type),
+                top_provider_context_length: context_length,
+                is_moderated: true,
+                max_completion_tokens: 8_192,
+            }
+        })
+        .collect()
+}
+
+fn xrouter_supports_chat_generation(model: &XrouterProviderModelEntry) -> bool {
+    model.metadata.endpoints.iter().any(|endpoint| {
+        endpoint.path == "/v1/chat/completions" || endpoint.path == "/v1/completions"
+    })
+}
+
+fn map_xrouter_modality(model_type: &str) -> String {
+    match model_type {
+        "image+text-to-text" => "image+text->text".to_string(),
+        "audio-to-text" => "audio->text".to_string(),
+        _ => "text->text".to_string(),
+    }
+}
+
 fn fetch_gigachat_access_token(
     provider_config: &config::ProviderConfig,
     connect_timeout_seconds: u64,
@@ -736,6 +861,12 @@ impl AppState {
                         },
                         Some(config.provider_max_inflight),
                     )),
+                    "xrouter" => Arc::new(XrouterClient::new(
+                        provider_config.base_url.clone(),
+                        provider_config.api_key.clone(),
+                        shared_http_client.clone(),
+                        Some(config.provider_max_inflight),
+                    )),
                     _ => Arc::new(OpenAiClient::new(
                         provider.to_string(),
                         provider_config.base_url.clone(),
@@ -764,6 +895,7 @@ impl AppState {
                     && entry.provider != "zai"
                     && entry.provider != "yandex"
                     && entry.provider != "gigachat"
+                    && entry.provider != "xrouter"
             })
             .collect::<Vec<_>>();
 
@@ -908,6 +1040,42 @@ impl AppState {
                     event = "gigachat.models.loaded",
                     source = "none",
                     reason = "fetch_failed_no_fallback"
+                );
+            }
+        }
+
+        if enabled_providers.contains("xrouter")
+            && let Some(xrouter_config) = config.providers.get("xrouter")
+        {
+            if cfg!(test) {
+                models.extend(
+                    default_catalog
+                        .iter()
+                        .filter(|model| model.provider == "xrouter")
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                );
+            } else if let Some(xrouter_models) =
+                fetch_xrouter_models(xrouter_config, config.provider_timeout_seconds)
+            {
+                info!(
+                    event = "xrouter.models.loaded",
+                    source = "remote",
+                    model_count = xrouter_models.len()
+                );
+                models.extend(xrouter_models);
+            } else {
+                warn!(
+                    event = "xrouter.models.loaded",
+                    source = "fallback",
+                    reason = "fetch_failed"
+                );
+                models.extend(
+                    default_catalog
+                        .iter()
+                        .filter(|model| model.provider == "xrouter")
+                        .cloned()
+                        .collect::<Vec<_>>(),
                 );
             }
         }
@@ -1792,6 +1960,49 @@ mod tests {
         assert_eq!(models[1].context_length, 200_000);
         assert_eq!(models[2].id, "glm-5");
         assert_eq!(models[2].max_completion_tokens, 128_000);
+    }
+
+    #[test]
+    fn map_xrouter_models_filters_non_chat_models_and_hardcodes_missing_fields() {
+        let payload: XrouterProviderModelsResponse = serde_json::from_value(json!({
+            "data": [
+                {
+                    "id": "Qwen/Qwen3-235B-A22B-Instruct-2507",
+                    "context_length": 262144,
+                    "metadata": {
+                        "company": "Qwen",
+                        "name": "Qwen3-235B-A22B-Instruct-2507",
+                        "type": "llm",
+                        "endpoints": [{"path": "/v1/chat/completions"}]
+                    }
+                },
+                {
+                    "id": "Qwen/Qwen3-Embedding-0.6B",
+                    "context_length": 32768,
+                    "metadata": {
+                        "company": "Qwen",
+                        "name": "Qwen3-Embedding-0.6B",
+                        "type": "embedder",
+                        "endpoints": [{"path": "/v1/embeddings"}]
+                    }
+                }
+            ]
+        }))
+        .expect("payload must deserialize");
+
+        let models = map_xrouter_models(payload);
+        assert_eq!(models.len(), 1);
+        let model = &models[0];
+        assert_eq!(model.id, "Qwen/Qwen3-235B-A22B-Instruct-2507");
+        assert_eq!(model.provider, "xrouter");
+        assert_eq!(model.description, "Qwen3-235B-A22B-Instruct-2507 via xrouter (Qwen)");
+        assert_eq!(model.context_length, 262_144);
+        assert_eq!(model.top_provider_context_length, 262_144);
+        assert_eq!(model.max_completion_tokens, 8_192);
+        assert_eq!(model.modality, "text->text");
+        assert_eq!(model.tokenizer, "unknown");
+        assert_eq!(model.instruct_type, "none");
+        assert!(model.is_moderated);
     }
 
     fn assert_snapshot(name: &str, actual: &str, expected: &str) {

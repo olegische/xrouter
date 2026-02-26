@@ -4,7 +4,7 @@ mod clients;
 
 pub use clients::{
     DeepSeekClient, GigachatClient, MockProviderClient, OpenAiClient, OpenRouterClient,
-    YandexResponsesClient, ZaiClient,
+    XrouterClient, YandexResponsesClient, ZaiClient,
 };
 use futures::StreamExt;
 use reqwest::Client;
