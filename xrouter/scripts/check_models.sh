@@ -90,6 +90,8 @@ fi
 
 echo "[models] endpoint=${selected_url}"
 echo "[models] count=$(echo "$ids" | wc -l | tr -d ' ')"
+echo "[models] ids:"
+echo "$ids" | sed 's/^/  - /'
 
 if [[ "$provider" == "all" ]]; then
   echo "[models] PASS"

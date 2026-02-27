@@ -10,13 +10,16 @@ use axum::{
     Json, Router,
     body::Bytes,
     extract::{MatchedPath, State},
+    http::HeaderMap,
     response::{IntoResponse, Response, Sse, sse::Event},
     routing::{get, post},
 };
 use futures::StreamExt;
+use opentelemetry::{global, propagation::Extractor, trace::Status};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tracing::{debug, error, info, warn};
+use tracing::{Span, debug, error, field, info, info_span, trace_span, warn};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 use ureq::rustls::{
     self,
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
@@ -1294,10 +1297,27 @@ async fn get_xrouter_models(State(state): State<AppState>) -> Json<XrouterModels
 async fn post_responses(
     State(state): State<AppState>,
     matched_path: Option<MatchedPath>,
+    headers: HeaderMap,
     request_body: Bytes,
 ) -> Response {
     let started_at = Instant::now();
     let route = matched_path.as_ref().map_or("/api/v1/responses", MatchedPath::as_str).to_string();
+    let request_span = info_span!(
+        "http.request",
+        otel.name = "http.request",
+        otel.kind = "server",
+        openinference.span.kind = "CHAIN",
+        request.id = field::Empty,
+        response.id = field::Empty,
+        route = %route,
+        model = field::Empty,
+        provider = field::Empty,
+        stream = field::Empty,
+        input.value = field::Empty,
+        output.value = field::Empty
+    );
+    attach_parent_context(&request_span, &headers);
+    let _request_span_guard = request_span.enter();
     let mut request: ResponsesRequest = match serde_json::from_slice(&request_body) {
         Ok(request) => request,
         Err(err) => {
@@ -1324,6 +1344,10 @@ async fn post_responses(
     let provider = state.resolve_provider_key(&request.model);
     let provider_model = state.resolve_provider_model_id(&request.model);
     let public_model_id = synthesize_model_id(&provider, &provider_model);
+    request_span.record("model", public_model_id.as_str());
+    request_span.record("provider", provider.as_str());
+    request_span.record("stream", request.stream);
+    request_span.record("input.value", truncate_attr_value(&normalized_input, 512));
     request.model = provider_model;
     info!(
         event = "http.request.received",
@@ -1359,6 +1383,8 @@ async fn post_responses(
 
     if request.stream {
         let stream_route = route.clone();
+        let stream_provider = provider.clone();
+        let stream_request_span = request_span.clone();
         let response_id = new_prefixed_id("resp_");
         let stream_item_id = "msg_0".to_string();
         info!(
@@ -1401,6 +1427,18 @@ async fn post_responses(
 
         let stream = engine.execute_stream(request, None).flat_map(move |event| {
             let mut events = Vec::<Result<Event, Infallible>>::new();
+            if let Ok(ref mapped) = event {
+                if let Some(request_id) = response_event_request_id(mapped) {
+                    stream_request_span.record("request.id", request_id);
+                    stream_request_span.record("response.id", request_id);
+                }
+                record_response_event_classification(
+                    stream_route.as_str(),
+                    stream_provider.as_str(),
+                    "responses_sse",
+                    mapped,
+                );
+            }
             match event {
                 Ok(ResponseEvent::OutputTextDelta { delta, .. }) => {
                     events.push(Ok(Event::default().event("response.output_text.delta").data(
@@ -1429,7 +1467,7 @@ async fn post_responses(
                         event = "http.stream.completed",
                         route = stream_route,
                         response_id = %response_id,
-                        provider = %provider,
+                        provider = %stream_provider,
                         finish_reason = %finish_reason,
                         reasoning_present = reasoning.is_some(),
                         reasoning_chars = reasoning.as_ref().map(|it| it.len()).unwrap_or(0),
@@ -1467,11 +1505,12 @@ async fn post_responses(
                     )));
                 }
                 Ok(ResponseEvent::ResponseError { message, .. }) => {
+                    stream_request_span.set_status(Status::error(message.clone()));
                     warn!(
                         event = "http.stream.failed",
                         route = stream_route,
                         response_id = %response_id,
-                        provider = %provider,
+                        provider = %stream_provider,
                         duration_ms = started_at.elapsed().as_millis() as u64,
                         error = %message
                     );
@@ -1480,11 +1519,12 @@ async fn post_responses(
                         .data(json!({"type": "response.error", "error": message}).to_string())));
                 }
                 Err(error) => {
+                    stream_request_span.set_status(Status::error(error.to_string()));
                     warn!(
                         event = "http.stream.failed",
                         route = stream_route,
                         response_id = %response_id,
-                        provider = %provider,
+                        provider = %stream_provider,
                         duration_ms = started_at.elapsed().as_millis() as u64,
                         error = %error
                     );
@@ -1518,7 +1558,10 @@ async fn post_responses(
     match run_responses_request(engine, request).await {
         Ok(mut resp) => {
             resp.id = ensure_id_prefix(&resp.id, "resp_");
+            request_span.record("request.id", resp.id.as_str());
+            request_span.record("response.id", resp.id.as_str());
             let response_text = extract_message_text_from_output(&resp.output);
+            request_span.record("output.value", truncate_attr_value(&response_text, 512));
             let reasoning = extract_reasoning_from_output(&resp.output);
             debug!(
                 event = "http.response.payload",
@@ -1544,6 +1587,7 @@ async fn post_responses(
             Json(resp).into_response()
         }
         Err(err) => {
+            request_span.set_status(Status::error(err.to_string()));
             warn!(
                 event = "http.request.failed",
                 route = route,
@@ -1569,9 +1613,26 @@ async fn post_responses(
 )]
 async fn post_chat_completions(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<ChatCompletionsRequest>,
 ) -> Response {
     let started_at = Instant::now();
+    let request_span = info_span!(
+        "http.request",
+        otel.name = "http.request",
+        otel.kind = "server",
+        openinference.span.kind = "CHAIN",
+        request.id = field::Empty,
+        response.id = field::Empty,
+        route = "/api/v1/chat/completions",
+        model = field::Empty,
+        provider = field::Empty,
+        stream = field::Empty,
+        input.value = field::Empty,
+        output.value = field::Empty
+    );
+    attach_parent_context(&request_span, &headers);
+    let _request_span_guard = request_span.enter();
     let request_payload = request
         .messages
         .iter()
@@ -1583,6 +1644,10 @@ async fn post_chat_completions(
     let provider = state.resolve_provider_key(&core_request.model);
     let provider_model = state.resolve_provider_model_id(&core_request.model);
     let public_model_id = synthesize_model_id(&provider, &provider_model);
+    request_span.record("model", public_model_id.as_str());
+    request_span.record("provider", provider.as_str());
+    request_span.record("stream", request.stream);
+    request_span.record("input.value", truncate_attr_value(&request_payload, 512));
     core_request.model = provider_model;
     info!(
         event = "http.request.received",
@@ -1623,8 +1688,23 @@ async fn post_chat_completions(
             provider = %provider
         );
         let stream_provider = provider.clone();
+        let stream_route = "/api/v1/chat/completions".to_string();
+        let stream_request_span = request_span.clone();
         let stream_started_at = started_at;
-        let stream = engine.execute_stream(core_request, None).map(move |evt| match evt {
+        let stream = engine.execute_stream(core_request, None).map(move |evt| {
+            if let Ok(ref mapped) = evt {
+                if let Some(request_id) = response_event_request_id(mapped) {
+                    stream_request_span.record("request.id", request_id);
+                    stream_request_span.record("response.id", request_id);
+                }
+                record_response_event_classification(
+                    stream_route.as_str(),
+                    stream_provider.as_str(),
+                    "chat_completions_sse",
+                    mapped,
+                );
+            }
+            match evt {
             Ok(ResponseEvent::OutputTextDelta { delta, .. }) => Ok::<Event, Infallible>(
                 Event::default().data(
                     json!({
@@ -1689,6 +1769,7 @@ async fn post_chat_completions(
                 Ok(Event::default().data(chunk.to_string()))
             }
             Ok(ResponseEvent::ResponseError { id, message }) => {
+                stream_request_span.set_status(Status::error(message.clone()));
                 warn!(
                     event = "http.stream.failed",
                     route = "/api/v1/chat/completions",
@@ -1701,6 +1782,7 @@ async fn post_chat_completions(
                     .data(json!({"id": chat_completion_id.clone(), "error": message}).to_string()))
             }
             Err(error) => {
+                stream_request_span.set_status(Status::error(error.to_string()));
                 warn!(
                     event = "http.stream.failed",
                     route = "/api/v1/chat/completions",
@@ -1711,7 +1793,7 @@ async fn post_chat_completions(
                 Ok(Event::default()
                     .data(json!({"id": chat_completion_id.clone(), "error": error.to_string()}).to_string()))
             }
-        });
+        }});
 
         let done =
             futures::stream::iter(vec![Ok::<Event, Infallible>(Event::default().data("[DONE]"))]);
@@ -1721,7 +1803,10 @@ async fn post_chat_completions(
     match run_responses_request(engine, core_request).await {
         Ok(mut resp) => {
             resp.id = ensure_id_prefix(&resp.id, "resp_");
+            request_span.record("request.id", resp.id.as_str());
+            request_span.record("response.id", resp.id.as_str());
             let response_text = extract_message_text_from_output(&resp.output);
+            request_span.record("output.value", truncate_attr_value(&response_text, 512));
             let reasoning = extract_reasoning_from_output(&resp.output);
             debug!(
                 event = "http.response.payload",
@@ -1749,6 +1834,7 @@ async fn post_chat_completions(
             Json(chat).into_response()
         }
         Err(err) => {
+            request_span.set_status(Status::error(err.to_string()));
             warn!(
                 event = "http.request.failed",
                 route = "/api/v1/chat/completions",
@@ -1767,6 +1853,81 @@ async fn run_responses_request(
     request: ResponsesRequest,
 ) -> Result<ResponsesResponse, CoreError> {
     engine.execute(request).await
+}
+
+struct HeaderMapExtractor<'a>(&'a HeaderMap);
+
+impl<'a> Extractor for HeaderMapExtractor<'a> {
+    fn get(&self, key: &str) -> Option<&str> {
+        self.0.get(key).and_then(|value| value.to_str().ok())
+    }
+
+    fn keys(&self) -> Vec<&str> {
+        self.0.keys().map(axum::http::header::HeaderName::as_str).collect()
+    }
+}
+
+fn attach_parent_context(span: &Span, headers: &HeaderMap) {
+    global::get_text_map_propagator(|propagator| {
+        let context = propagator.extract(&HeaderMapExtractor(headers));
+        span.set_parent(context);
+    });
+}
+
+fn response_event_otel_name(event: &ResponseEvent) -> &'static str {
+    match event {
+        ResponseEvent::OutputTextDelta { .. } => "output_text_delta",
+        ResponseEvent::ReasoningDelta { .. } => "reasoning_delta",
+        ResponseEvent::ResponseCompleted { .. } => "completed",
+        ResponseEvent::ResponseError { .. } => "error",
+    }
+}
+
+fn response_event_request_id(event: &ResponseEvent) -> Option<&str> {
+    match event {
+        ResponseEvent::OutputTextDelta { id, .. }
+        | ResponseEvent::ReasoningDelta { id, .. }
+        | ResponseEvent::ResponseCompleted { id, .. }
+        | ResponseEvent::ResponseError { id, .. } => Some(id.as_str()),
+    }
+}
+
+fn record_response_event_classification(
+    route: &str,
+    provider: &str,
+    from: &str,
+    event: &ResponseEvent,
+) {
+    let span = trace_span!(
+        "handle_responses",
+        otel.kind = "internal",
+        openinference.span.kind = "CHAIN",
+        otel.name = field::Empty,
+        request.id = field::Empty,
+        tool_name = field::Empty,
+        from = from,
+        route = route,
+        provider = provider
+    );
+    if let Some(request_id) = response_event_request_id(event) {
+        span.record("request.id", request_id);
+    }
+    span.record("otel.name", response_event_otel_name(event));
+    if let ResponseEvent::ResponseCompleted { output, .. } = event
+        && let Some(name) = first_function_tool_name(output)
+    {
+        span.record("tool_name", name);
+    }
+    let _entered = span.enter();
+}
+
+fn first_function_tool_name(output: &[ResponseOutputItem]) -> Option<&str> {
+    output.iter().find_map(|item| match item {
+        ResponseOutputItem::FunctionCall { name, .. } if !name.trim().is_empty() => {
+            Some(name.as_str())
+        }
+        _ => None,
+    })
 }
 
 fn error_response(err: CoreError) -> Response {
@@ -1807,6 +1968,18 @@ fn preview_request_body(body: &[u8]) -> String {
         preview.push_str("...");
     }
     preview
+}
+
+fn truncate_attr_value(text: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for (i, ch) in text.chars().enumerate() {
+        if i >= max_chars {
+            out.push_str("...");
+            return out;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 fn extract_message_text_from_output(output: &[ResponseOutputItem]) -> String {
