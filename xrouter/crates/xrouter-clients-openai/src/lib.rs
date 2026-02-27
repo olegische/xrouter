@@ -7,12 +7,15 @@ pub use clients::{
     XrouterClient, YandexResponsesClient, ZaiClient,
 };
 use futures::StreamExt;
+use opentelemetry::{global, propagation::Injector, trace::Status};
 use reqwest::Client;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
 use tokio::sync::{Semaphore, mpsc};
 use tokio::time::sleep;
-use tracing::{debug, warn};
+use tracing::{Instrument, debug, field, info_span, warn};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 use xrouter_contracts::{
     ResponseEvent, ResponseInputContent, ResponseInputItem, ResponsesInput, ToolCall, ToolFunction,
@@ -96,6 +99,7 @@ impl HttpRuntime {
 
     async fn send_post(
         &self,
+        request_id: &str,
         url: &str,
         payload: &Value,
         bearer_override: Option<&str>,
@@ -104,19 +108,46 @@ impl HttpRuntime {
         let _permit = self.acquire_inflight_permit()?;
         for attempt in 1..=2 {
             let client = self.client()?;
-            let mut request =
-                client.post(url).header("Content-Type", "application/json").json(payload);
-            if let Some(token) = bearer_override.or(self.api_key()) {
-                request = request.bearer_auth(token);
+            let http_span = info_span!(
+                "provider_http_request",
+                otel.name = field::Empty,
+                otel.kind = "client",
+                request.id = request_id,
+                provider.request_id = request_id,
+                provider = %self.provider_id,
+                http.method = "POST",
+                http.url = url,
+                http.retry_count = attempt - 1,
+                http.response.status_code = field::Empty
+            );
+            http_span.record("otel.name", "provider_http_request");
+
+            let response = async {
+                let mut request =
+                    client.post(url).header("Content-Type", "application/json").json(payload);
+                request = inject_trace_headers(request);
+                if let Some(token) = bearer_override.or(self.api_key()) {
+                    request = request.bearer_auth(token);
+                }
+                for (name, value) in extra_headers {
+                    request = request.header(name, value);
+                }
+                request
+                    .send()
+                    .await
+                    .map_err(|err| CoreError::Provider(format!("provider request failed: {err}")))
             }
-            for (name, value) in extra_headers {
-                request = request.header(name, value);
-            }
-            let response = request
-                .send()
-                .await
-                .map_err(|err| CoreError::Provider(format!("provider request failed: {err}")))?;
+            .instrument(http_span.clone())
+            .await;
+            let response = match response {
+                Ok(response) => response,
+                Err(error) => {
+                    http_span.set_status(Status::error(error.to_string()));
+                    return Err(error);
+                }
+            };
             let status = response.status();
+            http_span.record("http.response.status_code", status.as_u16());
             if status.is_success() {
                 return Ok(response);
             }
@@ -159,6 +190,9 @@ impl HttpRuntime {
             }
 
             let reason = status.canonical_reason().unwrap_or("Unknown");
+            http_span.set_status(Status::error(format!(
+                "provider returned error status: {status} ({reason})"
+            )));
             return Err(CoreError::Provider(format!(
                 "provider returned error status: {status} ({reason}) for url ({url})"
             )));
@@ -178,7 +212,20 @@ impl HttpRuntime {
         extra_headers: &[(String, String)],
         sender: Option<&mpsc::Sender<Result<ResponseEvent, CoreError>>>,
     ) -> Result<ProviderOutcome, CoreError> {
-        let response = self.send_post(url, payload, bearer_override, extra_headers).await?;
+        let request_span = info_span!(
+            "provider_stream_request",
+            otel.name = "provider_stream_request",
+            otel.kind = "internal",
+            request.id = request_id,
+            provider.request_id = request_id,
+            provider = %self.provider_id,
+            request_id = request_id,
+            stream_kind = "chat_completions"
+        );
+        let response = self
+            .send_post(request_id, url, payload, bearer_override, extra_headers)
+            .instrument(request_span)
+            .await?;
         let is_json = response
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
@@ -336,7 +383,20 @@ impl HttpRuntime {
         extra_headers: &[(String, String)],
         sender: Option<&mpsc::Sender<Result<ResponseEvent, CoreError>>>,
     ) -> Result<ProviderOutcome, CoreError> {
-        let response = self.send_post(url, payload, bearer_override, extra_headers).await?;
+        let request_span = info_span!(
+            "provider_stream_request",
+            otel.name = "provider_stream_request",
+            otel.kind = "internal",
+            request.id = request_id,
+            provider.request_id = request_id,
+            provider = %self.provider_id,
+            request_id = request_id,
+            stream_kind = "responses"
+        );
+        let response = self
+            .send_post(request_id, url, payload, bearer_override, extra_headers)
+            .instrument(request_span)
+            .await?;
         let is_json = response
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
@@ -484,6 +544,29 @@ impl HttpRuntime {
             .await
             .map_err(|err| CoreError::Provider(format!("provider response parse failed: {err}")))
     }
+}
+
+struct HeaderMapInjector<'a>(&'a mut HeaderMap);
+
+impl<'a> Injector for HeaderMapInjector<'a> {
+    fn set(&mut self, key: &str, value: String) {
+        if let (Ok(name), Ok(value)) =
+            (HeaderName::from_bytes(key.as_bytes()), HeaderValue::from_str(&value))
+        {
+            self.0.insert(name, value);
+        }
+    }
+}
+
+fn inject_trace_headers(request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    let mut headers = HeaderMap::new();
+    global::get_text_map_propagator(|propagator| {
+        propagator.inject_context(
+            &tracing::Span::current().context(),
+            &mut HeaderMapInjector(&mut headers),
+        );
+    });
+    request.headers(headers)
 }
 
 fn should_log_stream_chunk_debug(index: usize) -> bool {
@@ -1333,6 +1416,14 @@ mod tests {
         openrouter::build_openrouter_payload, yandex::build_yandex_upstream_model,
         zai::build_zai_payload,
     };
+    use opentelemetry::{
+        propagation::{Extractor, TextMapPropagator},
+        trace::{TraceContextExt, TracerProvider},
+    };
+    use opentelemetry_sdk::{propagation::TraceContextPropagator, trace::SdkTracerProvider};
+    use tracing::trace_span;
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
     use xrouter_contracts::{ReasoningConfig, ResponseInputItem, ResponsesInput, ToolFunction};
 
     fn reasoning(effort: &str) -> ReasoningConfig {
@@ -1341,6 +1432,53 @@ mod tests {
 
     fn text_input(text: &str) -> ResponsesInput {
         ResponsesInput::Text(text.to_string())
+    }
+
+    #[test]
+    fn inject_trace_headers_uses_current_span_context() {
+        global::set_text_map_propagator(TraceContextPropagator::new());
+        let provider = SdkTracerProvider::builder().build();
+        let tracer = provider.tracer("test-tracer");
+        let subscriber =
+            tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
+        let _guard = subscriber.set_default();
+
+        let span = trace_span!("provider_http_request_test");
+        let _entered = span.enter();
+        let span_context = span.context().span().span_context().clone();
+        let request = reqwest::Client::new().post("http://localhost/health");
+        let request = inject_trace_headers(request);
+        let request = request.build().expect("request must build");
+
+        let extracted =
+            TraceContextPropagator::new().extract(&HeaderMapExtractor(request.headers()));
+        let extracted_span = extracted.span();
+        let extracted_context = extracted_span.span_context();
+        assert!(extracted_context.is_valid());
+        assert_eq!(extracted_context.trace_id(), span_context.trace_id());
+    }
+
+    #[test]
+    fn inject_trace_headers_without_active_span_does_not_fail() {
+        global::set_text_map_propagator(TraceContextPropagator::new());
+        let request = reqwest::Client::new().post("http://localhost/health");
+        let request = inject_trace_headers(request);
+        let request = request.build().expect("request must build");
+        let maybe_traceparent =
+            request.headers().get("traceparent").and_then(|value| value.to_str().ok());
+        assert!(maybe_traceparent.is_none() || maybe_traceparent == Some(""));
+    }
+
+    struct HeaderMapExtractor<'a>(&'a reqwest::header::HeaderMap);
+
+    impl<'a> Extractor for HeaderMapExtractor<'a> {
+        fn get(&self, key: &str) -> Option<&str> {
+            self.0.get(key).and_then(|value| value.to_str().ok())
+        }
+
+        fn keys(&self) -> Vec<&str> {
+            self.0.keys().map(reqwest::header::HeaderName::as_str).collect()
+        }
     }
 
     #[test]

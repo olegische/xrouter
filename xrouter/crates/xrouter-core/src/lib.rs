@@ -1,9 +1,11 @@
 use std::{sync::Arc, time::Instant};
 
 use async_trait::async_trait;
+use opentelemetry::trace::Status;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::{Instrument, error, info, info_span, warn};
+use tracing::{Instrument, error, field, info, info_span, warn};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 use xrouter_contracts::{
     ReasoningConfig, ResponseEvent, ResponseOutputItem, ResponseOutputText,
@@ -102,6 +104,84 @@ pub struct ModelDescriptor {
 
 pub fn synthesize_model_id(provider: &str, provider_model: &str) -> String {
     format!("{provider}/{provider_model}")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CanonicalLlmIdentity<'a> {
+    provider: &'a str,
+    model_name: &'a str,
+}
+
+fn is_provider_namespace(namespace: &str) -> bool {
+    matches!(
+        namespace,
+        "xrouter"
+            | "openai"
+            | "anthropic"
+            | "google"
+            | "deepseek"
+            | "mistral"
+            | "meta"
+            | "cohere"
+            | "xai"
+            | "openrouter"
+            | "zai"
+            | "yandex"
+            | "gigachat"
+    )
+}
+
+fn provider_from_model_prefix(model: &str) -> Option<&'static str> {
+    let lower = model.to_ascii_lowercase();
+    if lower.starts_with("deepseek") {
+        Some("deepseek")
+    } else if lower.starts_with("gpt-")
+        || lower.starts_with("o1")
+        || lower.starts_with("o3")
+        || lower.starts_with("text-embedding-")
+    {
+        Some("openai")
+    } else if lower.starts_with("claude") {
+        Some("anthropic")
+    } else if lower.starts_with("gemini") {
+        Some("google")
+    } else if lower.starts_with("mistral") {
+        Some("mistral")
+    } else if lower.starts_with("llama") {
+        Some("meta")
+    } else if lower.starts_with("zai") || lower.starts_with("glm") {
+        Some("zai")
+    } else {
+        None
+    }
+}
+
+fn canonicalize_llm_identity(model: &str) -> CanonicalLlmIdentity<'_> {
+    if let Some((namespace, tail)) = model.split_once('/') {
+        if is_provider_namespace(namespace) {
+            return CanonicalLlmIdentity { provider: namespace, model_name: tail };
+        }
+        if let Some(provider) = provider_from_model_prefix(namespace) {
+            return CanonicalLlmIdentity { provider, model_name: model };
+        }
+        return CanonicalLlmIdentity { provider: namespace, model_name: model };
+    }
+    if let Some(provider) = provider_from_model_prefix(model) {
+        return CanonicalLlmIdentity { provider, model_name: model };
+    }
+    CanonicalLlmIdentity { provider: "unknown", model_name: model }
+}
+
+fn truncate_text(value: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for (i, ch) in value.chars().enumerate() {
+        if i >= max_chars {
+            out.push_str("...");
+            return out;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 pub fn default_model_catalog() -> Vec<ModelDescriptor> {
@@ -366,6 +446,31 @@ impl StageHandler for GenerateHandler {
             input_chars = context.input.len()
         );
         let provider_started_at = Instant::now();
+        let canonical_llm = canonicalize_llm_identity(&context.model);
+        let provider_span = info_span!(
+            "provider_generate",
+            otel.name = field::Empty,
+            otel.kind = "internal",
+            openinference.span.kind = "LLM",
+            request.id = %context.request_id,
+            provider.request_id = %context.request_id,
+            request_id = %context.request_id,
+            provider_model = %context.model,
+            llm.provider = %canonical_llm.provider,
+            llm.model_name = %canonical_llm.model_name,
+            xrouter.model_id = %context.model,
+            input.value = %truncate_text(&context.input, 512),
+            output_tokens = field::Empty,
+            chunk_count = field::Empty,
+            output.value = field::Empty,
+            token_count.prompt = field::Empty,
+            token_count.completion = field::Empty,
+            token_count.total = field::Empty,
+            llm.token_count.prompt = field::Empty,
+            llm.token_count.completion = field::Empty,
+            llm.token_count.total = field::Empty
+        );
+        provider_span.record("otel.name", "provider_generate");
         let result = match self
             .provider
             .generate_stream(ProviderGenerateStreamRequest {
@@ -379,10 +484,12 @@ impl StageHandler for GenerateHandler {
                 },
                 sender: self.sender.as_ref(),
             })
+            .instrument(provider_span.clone())
             .await
         {
             Ok(result) => result,
             Err(error) => {
+                provider_span.set_status(Status::error(error.to_string()));
                 warn!(
                     event = "provider.request.failed",
                     provider_model = %context.model,
@@ -392,6 +499,15 @@ impl StageHandler for GenerateHandler {
                 return Err(error);
             }
         };
+        provider_span.record("output_tokens", result.output_tokens);
+        provider_span.record("chunk_count", result.chunks.len());
+        provider_span.record("output.value", truncate_text(&result.chunks.join(""), 512));
+        provider_span.record("token_count.prompt", context.input_tokens);
+        provider_span.record("token_count.completion", result.output_tokens);
+        provider_span.record("token_count.total", context.input_tokens + result.output_tokens);
+        provider_span.record("llm.token_count.prompt", context.input_tokens);
+        provider_span.record("llm.token_count.completion", result.output_tokens);
+        provider_span.record("llm.token_count.total", context.input_tokens + result.output_tokens);
         info!(
             event = "provider.request.completed",
             provider_model = %context.model,
@@ -689,6 +805,8 @@ impl ExecutionEngine {
         let stage_label = format!("{stage:?}");
         let span = info_span!(
             "pipeline_stage",
+            otel.kind = "internal",
+            request.id = %context.request_id,
             request_id = %context.request_id,
             stage = ?stage,
             model = %context.model
@@ -702,6 +820,8 @@ impl ExecutionEngine {
                 match stage {
                     StageName::Ingest | StageName::Tokenize => {
                         context.state = KernelState::Failed;
+                        tracing::Span::current()
+                            .set_status(Status::error("client disconnected".to_string()));
                         warn!(
                             event = "pipeline.stage.disconnected",
                             duration_ms = stage_started_at.elapsed().as_millis() as u64
@@ -719,12 +839,15 @@ impl ExecutionEngine {
                     state = ?context.state,
                     duration_ms = stage_started_at.elapsed().as_millis() as u64
                 ),
-                Err(error) => warn!(
-                    event = "pipeline.stage.failed",
-                    stage_name = %stage_label,
-                    duration_ms = stage_started_at.elapsed().as_millis() as u64,
-                    error = %error
-                ),
+                Err(error) => {
+                    tracing::Span::current().set_status(Status::error(error.to_string()));
+                    warn!(
+                        event = "pipeline.stage.failed",
+                        stage_name = %stage_label,
+                        duration_ms = stage_started_at.elapsed().as_millis() as u64,
+                        error = %error
+                    );
+                }
             }
             result
         }
@@ -961,5 +1084,29 @@ usage_total=3
         for (fixture, expected) in fixtures {
             check_fixture(fixture, expected).await;
         }
+    }
+
+    #[test]
+    fn canonicalize_llm_identity_maps_known_shapes() {
+        assert_eq!(
+            canonicalize_llm_identity("deepseek-chat"),
+            CanonicalLlmIdentity { provider: "deepseek", model_name: "deepseek-chat" }
+        );
+        assert_eq!(
+            canonicalize_llm_identity("anthropic/claude-3.5-sonnet"),
+            CanonicalLlmIdentity { provider: "anthropic", model_name: "claude-3.5-sonnet" }
+        );
+        assert_eq!(
+            canonicalize_llm_identity("zai-org/GLM-4.7"),
+            CanonicalLlmIdentity { provider: "zai", model_name: "zai-org/GLM-4.7" }
+        );
+        assert_eq!(
+            canonicalize_llm_identity("acme/internal-model"),
+            CanonicalLlmIdentity { provider: "acme", model_name: "acme/internal-model" }
+        );
+        assert_eq!(
+            canonicalize_llm_identity("mystery-model"),
+            CanonicalLlmIdentity { provider: "unknown", model_name: "mystery-model" }
+        );
     }
 }
