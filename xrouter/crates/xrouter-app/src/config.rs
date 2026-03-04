@@ -60,6 +60,7 @@ pub struct AppConfig {
     pub host: String,
     pub port: u16,
     pub openai_compatible_api: bool,
+    pub byok_enabled: bool,
     pub provider_timeout_seconds: u64,
     pub provider_max_inflight: usize,
     pub gigachat_insecure_tls: bool,
@@ -74,6 +75,8 @@ pub enum ConfigError {
     InvalidPort(String),
     #[error("invalid ENABLE_OPENAI_COMPATIBLE_API value: {0}")]
     InvalidOpenAiCompatibleApiBool(String),
+    #[error("invalid XR_BYOK_ENABLED value: {0}")]
+    InvalidByokEnabledBool(String),
     #[error("invalid XR_PROVIDER_TIMEOUT value: {0}")]
     InvalidProviderConnectTimeout(String),
     #[error("invalid XR_PROVIDER_MAX_INFLIGHT value: {0}")]
@@ -93,6 +96,9 @@ impl AppConfig {
         let openai_compatible_api = parse_bool(&openai_compatible_raw).ok_or_else(|| {
             ConfigError::InvalidOpenAiCompatibleApiBool(openai_compatible_raw.clone())
         })?;
+        let byok_enabled_raw = env::var("XR_BYOK_ENABLED").unwrap_or_else(|_| "false".to_string());
+        let byok_enabled = parse_bool(&byok_enabled_raw)
+            .ok_or_else(|| ConfigError::InvalidByokEnabledBool(byok_enabled_raw.clone()))?;
         let provider_timeout_raw =
             env::var("XR_PROVIDER_TIMEOUT").unwrap_or_else(|_| "15".to_string());
         let provider_timeout_seconds = provider_timeout_raw.parse::<u64>().map_err(|_| {
@@ -127,6 +133,7 @@ impl AppConfig {
             host,
             port,
             openai_compatible_api,
+            byok_enabled,
             provider_timeout_seconds,
             provider_max_inflight,
             gigachat_insecure_tls,
@@ -141,6 +148,7 @@ impl AppConfig {
             host: "127.0.0.1".to_string(),
             port: 3000,
             openai_compatible_api: false,
+            byok_enabled: false,
             provider_timeout_seconds: 15,
             provider_max_inflight: 100,
             gigachat_insecure_tls: false,
@@ -196,7 +204,11 @@ fn provider_from_env(name: &str, prefix: &str) -> (String, ProviderConfig) {
     let base_url_var = format!("{prefix}_BASE_URL");
     let project_var = format!("{prefix}_PROJECT");
 
-    let api_key = env::var(api_key_var).ok().filter(|v| !v.trim().is_empty());
+    let api_key = if name == "gigachat" {
+        env::var("GIGACHAT_CREDENTIALS").ok().filter(|v| !v.trim().is_empty())
+    } else {
+        env::var(api_key_var).ok().filter(|v| !v.trim().is_empty())
+    };
     let base_url = env::var(base_url_var)
         .ok()
         .filter(|v| !v.trim().is_empty())

@@ -7,28 +7,35 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 if [[ $# -lt 1 ]]; then
-  echo "usage: $0 <provider> [mode]" >&2
+  echo "usage: $0 <provider> [mode] [auth-mode]" >&2
   echo "mode: non-stream (default) | stream" >&2
+  echo "auth-mode: config (default) | byok" >&2
   echo "providers: openrouter deepseek deepseek-reasoner gigachat yandex ollama zai xrouter" >&2
   exit 1
 fi
 
 provider="$1"
 mode="${2:-non-stream}"
+auth_mode="${3:-config}"
 if [[ "$mode" != "non-stream" && "$mode" != "stream" ]]; then
   echo "unsupported mode: $mode (use non-stream|stream)" >&2
+  exit 1
+fi
+if [[ "$auth_mode" != "config" && "$auth_mode" != "byok" ]]; then
+  echo "unsupported auth-mode: $auth_mode (use config|byok)" >&2
   exit 1
 fi
 HOST="${XR_HOST:-127.0.0.1}"
 PORT="${XR_PORT:-8900}"
 API_KEY="${API_KEY:-}"
+BYOK_API_KEY="${BYOK_API_KEY:-}"
 BASE_URL="http://${HOST}:${PORT}"
 
 case "$provider" in
   openrouter) model="openrouter/anthropic/claude-3.5-sonnet" ;;
   deepseek) model="deepseek/deepseek-chat" ;;
   deepseek-reasoner) model="deepseek/deepseek-reasoner" ;;
-  gigachat) model="gigachat/GigaChat-2-Max" ;;
+  gigachat) model="gigachat/GigaChat-2" ;;
   yandex) model="yandex/yandexgpt/rc" ;;
   ollama) model="ollama/llama3.1:8b" ;;
   zai) model="zai/glm-4.5" ;;
@@ -46,16 +53,25 @@ fi
 CHAT_URL="${BASE_URL}/api/v1/chat/completions"
 RESPONSES_URL="${BASE_URL}/api/v1/responses"
 
+REQUEST_API_KEY="$API_KEY"
+if [[ "$auth_mode" == "byok" ]]; then
+  REQUEST_API_KEY="${BYOK_API_KEY:-$API_KEY}"
+  if [[ -z "$REQUEST_API_KEY" ]]; then
+    echo "byok auth-mode requires BYOK_API_KEY (or API_KEY as fallback)" >&2
+    exit 1
+  fi
+fi
+
 curl_json() {
   local url="$1"
   local payload="$2"
   local http_code
 
-  if [[ -n "$API_KEY" ]]; then
+  if [[ -n "$REQUEST_API_KEY" ]]; then
     http_code=$(curl -sS -o /tmp/xrouter_smoke_body.json -w "%{http_code}" \
       -X POST "$url" \
       -H "Content-Type: application/json" \
-      -H "Authorization: Bearer $API_KEY" \
+      -H "Authorization: Bearer $REQUEST_API_KEY" \
       -d "$payload")
   else
     http_code=$(curl -sS -o /tmp/xrouter_smoke_body.json -w "%{http_code}" \
@@ -76,11 +92,11 @@ curl_json() {
 curl_stream() {
   local url="$1"
   local payload="$2"
-  if [[ -n "$API_KEY" ]]; then
+  if [[ -n "$REQUEST_API_KEY" ]]; then
     curl -sS -N \
       -X POST "$url" \
       -H "Content-Type: application/json" \
-      -H "Authorization: Bearer $API_KEY" \
+      -H "Authorization: Bearer $REQUEST_API_KEY" \
       -d "$payload"
   else
     curl -sS -N \
@@ -95,7 +111,46 @@ if [[ "$mode" == "stream" ]]; then
   stream_flag=true
 fi
 
-echo "[smoke][$provider][$mode] model=$model host=$HOST port=$PORT"
+echo "[smoke][$provider][$mode][$auth_mode] model=$model host=$HOST port=$PORT"
+
+if [[ "$auth_mode" == "byok" && "$provider" != "yandex" ]]; then
+  byok_probe_payload=$(jq -n --arg model "$model" '{
+    model: $model,
+    input: "probe",
+    stream: false
+  }')
+  byok_probe_code=$(curl -sS -o /tmp/xrouter_smoke_probe_body.json -w "%{http_code}" \
+    -X POST "$RESPONSES_URL" \
+    -H "Content-Type: application/json" \
+    -d "$byok_probe_payload")
+  if [[ "$byok_probe_code" -ne 400 ]]; then
+    echo "expected strict BYOK behavior (missing Authorization -> 400), got http=$byok_probe_code" >&2
+    cat /tmp/xrouter_smoke_probe_body.json >&2 || true
+    echo "ensure server is started with XR_BYOK_ENABLED=true" >&2
+    exit 1
+  fi
+fi
+
+if [[ "$auth_mode" == "byok" && "$provider" == "yandex" ]]; then
+  yandex_byok_payload=$(jq -n --arg model "$model" '{
+    model: $model,
+    input: "probe",
+    stream: false
+  }')
+  yandex_byok_code=$(curl -sS -o /tmp/xrouter_smoke_body.json -w "%{http_code}" \
+    -X POST "$RESPONSES_URL" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $REQUEST_API_KEY" \
+    -d "$yandex_byok_payload")
+  if [[ "$yandex_byok_code" -ne 400 ]]; then
+    echo "expected yandex BYOK rejection (400), got http=$yandex_byok_code" >&2
+    cat /tmp/xrouter_smoke_body.json >&2 || true
+    exit 1
+  fi
+  echo "[smoke][$provider][$mode][$auth_mode] yandex BYOK rejection ok"
+  echo "[smoke][$provider][$mode][$auth_mode] PASS"
+  exit 0
+fi
 
 chat_payload=$(jq -n --arg model "$model" '{
   model: $model,
@@ -128,7 +183,7 @@ else
   fi
 fi
 
-echo "[smoke][$provider][$mode] chat completions ok"
+echo "[smoke][$provider][$mode][$auth_mode] chat completions ok"
 
 responses_payload=$(jq -n --arg model "$model" '{
   model: $model,
@@ -158,7 +213,7 @@ else
   fi
 fi
 
-echo "[smoke][$provider][$mode] responses ok"
+echo "[smoke][$provider][$mode][$auth_mode] responses ok"
 
 # Tool-like scenario smoke: current Rust contract does not support native function-calling schema.
 # We still validate a 2-step exchange with tool-style roles/content is accepted and returns a response.
@@ -209,5 +264,5 @@ else
   fi
 fi
 
-echo "[smoke][$provider][$mode] tool-like chat flow ok"
-echo "[smoke][$provider][$mode] PASS"
+echo "[smoke][$provider][$mode][$auth_mode] tool-like chat flow ok"
+echo "[smoke][$provider][$mode][$auth_mode] PASS"

@@ -76,3 +76,22 @@ This keeps snapshots stable and readable while still verifying external behavior
 - Add fixture-driven adapter edge cases (tools/function-calls) during migration.
 - Extend stream snapshots with finer event assertions.
 - Expand formal property-to-test mapping aligned with `formal/property-map.md`.
+
+## Smoke BYOK
+
+Smoke script supports BYOK mode:
+
+```bash
+cd xrouter
+XR_BYOK_ENABLED=true just smoke-byok deepseek
+XR_BYOK_ENABLED=true just smoke-byok-stream deepseek
+```
+
+Token source for BYOK smoke:
+
+- `BYOK_API_KEY` (preferred)
+- fallback: `API_KEY`
+
+In BYOK mode script validates strict behavior:
+- non-`yandex`: request without `Authorization` must return `400`;
+- `yandex`: request with BYOK token must be rejected with `400` (`BYOK not supported`).

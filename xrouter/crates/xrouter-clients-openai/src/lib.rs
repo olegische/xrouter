@@ -574,6 +574,7 @@ fn should_log_stream_chunk_debug(index: usize) -> bool {
 }
 
 fn truncate_for_debug(text: &str, limit: usize) -> String {
+    let text = redact_bearer_tokens(text);
     let mut out = String::new();
     for (i, ch) in text.chars().enumerate() {
         if i >= limit {
@@ -583,6 +584,45 @@ fn truncate_for_debug(text: &str, limit: usize) -> String {
         out.push(ch);
     }
     out
+}
+
+fn redact_bearer_tokens(text: &str) -> String {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0usize;
+    while i < chars.len() {
+        if matches_bearer_prefix(&chars, i) {
+            for ch in &chars[i..i + 7] {
+                out.push(*ch);
+            }
+            i += 7;
+            while i < chars.len() && !is_bearer_token_delimiter(chars[i]) {
+                i += 1;
+            }
+            out.push_str("***");
+            continue;
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+fn matches_bearer_prefix(chars: &[char], idx: usize) -> bool {
+    if idx + 7 > chars.len() {
+        return false;
+    }
+    chars[idx].eq_ignore_ascii_case(&'b')
+        && chars[idx + 1].eq_ignore_ascii_case(&'e')
+        && chars[idx + 2].eq_ignore_ascii_case(&'a')
+        && chars[idx + 3].eq_ignore_ascii_case(&'r')
+        && chars[idx + 4].eq_ignore_ascii_case(&'e')
+        && chars[idx + 5].eq_ignore_ascii_case(&'r')
+        && chars[idx + 6] == ' '
+}
+
+fn is_bearer_token_delimiter(ch: char) -> bool {
+    ch.is_whitespace() || matches!(ch, '"' | '\'' | ',' | ';' | ')' | '(' | ']' | '[' | '}')
 }
 
 fn should_retry_failed_status(

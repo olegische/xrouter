@@ -13,6 +13,11 @@ No required variables for local stub mode.
 - `ENABLE_OPENAI_COMPATIBLE_API` (default: `false`)
   - `false`: xrouter/openrouter-style access points (`/api/v1/...`)
   - `true`: OpenAI-compatible access points (`/v1/...`)
+- `XR_BYOK_ENABLED` (default: `false`)
+  - `false`: provider credentials are taken from config (`<PREFIX>_API_KEY`; for gigachat: `GIGACHAT_CREDENTIALS`)
+  - `true`: request `Authorization: Bearer <token>` is forwarded to upstream provider (strict mode, no fallback to config key)
+  - exception: `yandex` rejects BYOK requests with `400` (`BYOK is not supported for yandex provider`)
+  - `gigachat` BYOK expects a ready access token from client (router does not exchange user creds via OAuth)
 
 ## Observability
 
@@ -43,8 +48,12 @@ Startup preflight (soft mode):
 For each provider prefix (`OPENROUTER`, `DEEPSEEK`, `GIGACHAT`, `YANDEX`, `OLLAMA`, `ZAI`, `XROUTER`):
 
 - `<PREFIX>_ENABLED` (`true`/`false`, default: `true`)
-- `<PREFIX>_API_KEY`
+- `<PREFIX>_API_KEY` (except gigachat)
 - `<PREFIX>_BASE_URL`
+
+GigaChat credentials:
+
+- `GIGACHAT_CREDENTIALS` (used for OAuth token exchange to get short-lived access token)
 
 Example:
 

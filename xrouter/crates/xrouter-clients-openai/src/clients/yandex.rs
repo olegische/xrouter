@@ -78,7 +78,9 @@ impl ProviderClient for YandexResponsesClient {
         if let Some(project) = self.project.as_deref().filter(|value| !value.trim().is_empty()) {
             headers.push(("OpenAI-Project".to_string(), project.to_string()));
         }
-        self.runtime.post_responses_stream("request", &url, &payload, None, &headers, None).await
+        self.runtime
+            .post_responses_stream("request", &url, &payload, request.auth_bearer, &headers, None)
+            .await
     }
 
     async fn generate_stream(
@@ -121,7 +123,7 @@ impl ProviderClient for YandexResponsesClient {
                 request.request_id,
                 &url,
                 &payload,
-                None,
+                request.request.auth_bearer,
                 &headers,
                 request.sender,
             )

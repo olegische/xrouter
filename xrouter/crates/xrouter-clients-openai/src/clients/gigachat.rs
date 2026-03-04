@@ -91,7 +91,11 @@ impl ProviderClient for GigachatClient {
         &self,
         request: ProviderGenerateRequest<'_>,
     ) -> Result<ProviderOutcome, CoreError> {
-        let access_token = self.access_token().await?;
+        let access_token = if let Some(token) = request.auth_bearer {
+            token.to_string()
+        } else {
+            self.access_token().await?
+        };
         let url = self.runtime.build_url("chat/completions")?;
         let (payload, normalization) = build_gigachat_payload(
             request.model,
@@ -133,7 +137,11 @@ impl ProviderClient for GigachatClient {
         &self,
         request: ProviderGenerateStreamRequest<'_>,
     ) -> Result<ProviderOutcome, CoreError> {
-        let access_token = self.access_token().await?;
+        let access_token = if let Some(token) = request.request.auth_bearer {
+            token.to_string()
+        } else {
+            self.access_token().await?
+        };
         let url = self.runtime.build_url("chat/completions")?;
         let (payload, normalization) = build_gigachat_payload(
             request.request.model,

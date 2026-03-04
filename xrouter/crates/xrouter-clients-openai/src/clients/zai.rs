@@ -67,7 +67,9 @@ impl ProviderClient for ZaiClient {
                 dropped_tool_types = ?normalization.dropped_tool_types
             );
         }
-        self.runtime.post_chat_completions_stream("request", &url, &payload, None, &[], None).await
+        self.runtime
+            .post_chat_completions_stream("request", &url, &payload, request.auth_bearer, &[], None)
+            .await
     }
 
     async fn generate_stream(
@@ -105,7 +107,7 @@ impl ProviderClient for ZaiClient {
                 request.request_id,
                 &url,
                 &payload,
-                None,
+                request.request.auth_bearer,
                 &[],
                 request.sender,
             )

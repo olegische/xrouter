@@ -45,6 +45,7 @@ pub struct ExecutionContext {
     pub request_reasoning: Option<ReasoningConfig>,
     pub request_tools: Option<Vec<serde_json::Value>>,
     pub request_tool_choice: Option<serde_json::Value>,
+    pub auth_bearer: Option<String>,
     pub output_text: String,
     pub tool_calls: Option<Vec<ToolCall>>,
     pub reasoning: Option<String>,
@@ -54,7 +55,7 @@ pub struct ExecutionContext {
 }
 
 impl ExecutionContext {
-    fn new(request: ResponsesRequest) -> Self {
+    fn new(request: ResponsesRequest, auth_bearer: Option<String>) -> Self {
         let request_input = request.input.clone();
         let input = request_input.to_canonical_text();
         Self {
@@ -68,6 +69,7 @@ impl ExecutionContext {
             request_reasoning: request.reasoning,
             request_tools: request.tools,
             request_tool_choice: request.tool_choice,
+            auth_bearer,
             output_text: String::new(),
             tool_calls: None,
             reasoning: None,
@@ -381,6 +383,7 @@ pub struct ProviderGenerateRequest<'a> {
     pub reasoning: Option<&'a ReasoningConfig>,
     pub tools: Option<&'a [serde_json::Value]>,
     pub tool_choice: Option<&'a serde_json::Value>,
+    pub auth_bearer: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -481,6 +484,7 @@ impl StageHandler for GenerateHandler {
                     reasoning: context.request_reasoning.as_ref(),
                     tools: context.request_tools.as_deref(),
                     tool_choice: context.request_tool_choice.as_ref(),
+                    auth_bearer: context.auth_bearer.as_deref(),
                 },
                 sender: self.sender.as_ref(),
             })
@@ -636,7 +640,15 @@ impl ExecutionEngine {
     }
 
     pub async fn execute(&self, request: ResponsesRequest) -> Result<ResponsesResponse, CoreError> {
-        self.execute_with_disconnect(request, None).await
+        self.execute_with_auth(request, None).await
+    }
+
+    pub async fn execute_with_auth(
+        &self,
+        request: ResponsesRequest,
+        auth_bearer: Option<String>,
+    ) -> Result<ResponsesResponse, CoreError> {
+        self.execute_internal(request, None, None, auth_bearer).await
     }
 
     pub async fn execute_with_disconnect(
@@ -644,7 +656,7 @@ impl ExecutionEngine {
         request: ResponsesRequest,
         disconnect_at: Option<StageName>,
     ) -> Result<ResponsesResponse, CoreError> {
-        self.execute_internal(request, disconnect_at, None).await
+        self.execute_internal(request, disconnect_at, None, None).await
     }
 
     pub fn execute_stream(
@@ -652,10 +664,19 @@ impl ExecutionEngine {
         request: ResponsesRequest,
         disconnect_at: Option<StageName>,
     ) -> ReceiverStream<Result<ResponseEvent, CoreError>> {
+        self.execute_stream_with_auth(request, disconnect_at, None)
+    }
+
+    pub fn execute_stream_with_auth(
+        self: Arc<Self>,
+        request: ResponsesRequest,
+        disconnect_at: Option<StageName>,
+        auth_bearer: Option<String>,
+    ) -> ReceiverStream<Result<ResponseEvent, CoreError>> {
         let (tx, rx) = mpsc::channel(32);
         tokio::spawn(async move {
             let result = self
-                .execute_internal(request, disconnect_at, Some(tx.clone()))
+                .execute_internal(request, disconnect_at, Some(tx.clone()), auth_bearer)
                 .instrument(info_span!("execute_stream"))
                 .await;
             if let Err(e) = result {
@@ -675,9 +696,10 @@ impl ExecutionEngine {
         request: ResponsesRequest,
         disconnect_at: Option<StageName>,
         sender: Option<mpsc::Sender<Result<ResponseEvent, CoreError>>>,
+        auth_bearer: Option<String>,
     ) -> Result<ResponsesResponse, CoreError> {
         let request_started_at = Instant::now();
-        let mut context = ExecutionContext::new(request);
+        let mut context = ExecutionContext::new(request, auth_bearer);
         info!(
             event = "core.request.started",
             request_id = %context.request_id,
@@ -858,6 +880,8 @@ impl ExecutionEngine {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1108,5 +1132,68 @@ usage_total=3
             canonicalize_llm_identity("mystery-model"),
             CanonicalLlmIdentity { provider: "unknown", model_name: "mystery-model" }
         );
+    }
+
+    struct AuthCaptureProvider {
+        seen: Arc<Mutex<Option<String>>>,
+    }
+
+    #[async_trait]
+    impl ProviderClient for AuthCaptureProvider {
+        async fn generate(
+            &self,
+            request: ProviderGenerateRequest<'_>,
+        ) -> Result<ProviderOutcome, CoreError> {
+            *self.seen.lock().expect("lock must succeed") =
+                request.auth_bearer.map(ToString::to_string);
+            Ok(ProviderOutcome {
+                chunks: vec!["ok".to_string()],
+                output_tokens: 1,
+                reasoning: None,
+                reasoning_details: None,
+                tool_calls: None,
+                emitted_live: false,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_with_auth_passes_bearer_to_provider() {
+        let seen = Arc::new(Mutex::new(None));
+        let provider = Arc::new(AuthCaptureProvider { seen: seen.clone() });
+        let engine = ExecutionEngine::new(provider);
+        let request = ResponsesRequest {
+            model: "fake".to_string(),
+            input: xrouter_contracts::ResponsesInput::Text("hello".to_string()),
+            stream: false,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+        };
+
+        let _ = engine
+            .execute_with_auth(request, Some("byok-test-token".to_string()))
+            .await
+            .expect("request must succeed");
+
+        assert_eq!(seen.lock().expect("lock must succeed").as_deref(), Some("byok-test-token"));
+    }
+
+    #[tokio::test]
+    async fn execute_without_auth_keeps_provider_bearer_empty() {
+        let seen = Arc::new(Mutex::new(Some("placeholder".to_string())));
+        let provider = Arc::new(AuthCaptureProvider { seen: seen.clone() });
+        let engine = ExecutionEngine::new(provider);
+        let request = ResponsesRequest {
+            model: "fake".to_string(),
+            input: xrouter_contracts::ResponsesInput::Text("hello".to_string()),
+            stream: false,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+        };
+
+        let _ = engine.execute(request).await.expect("request must succeed");
+        assert_eq!(seen.lock().expect("lock must succeed").as_deref(), None);
     }
 }

@@ -41,7 +41,9 @@ impl ProviderClient for OpenAiClient {
             request.tools,
             request.tool_choice,
         );
-        self.runtime.post_chat_completions_stream("request", &url, &payload, None, &[], None).await
+        self.runtime
+            .post_chat_completions_stream("request", &url, &payload, request.auth_bearer, &[], None)
+            .await
     }
 
     async fn generate_stream(
@@ -61,7 +63,7 @@ impl ProviderClient for OpenAiClient {
                 request.request_id,
                 &url,
                 &payload,
-                None,
+                request.request.auth_bearer,
                 &[],
                 request.sender,
             )
