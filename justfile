@@ -32,6 +32,12 @@ smoke provider:
 smoke-stream provider:
     ./scripts/smoke_provider.sh {{ provider }} stream
 
+smoke-byok provider:
+    ./scripts/smoke_provider.sh {{ provider }} non-stream byok
+
+smoke-byok-stream provider:
+    ./scripts/smoke_provider.sh {{ provider }} stream byok
+
 smoke-reasoner:
     ./scripts/smoke_provider.sh deepseek-reasoner
 

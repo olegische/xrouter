@@ -18,7 +18,7 @@ use futures::StreamExt;
 use opentelemetry::{global, propagation::Extractor, trace::Status};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tracing::{Span, debug, error, field, info, info_span, trace_span, warn};
+use tracing::{Span, debug, field, info, info_span, trace_span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use ureq::rustls::{
     self,
@@ -27,21 +27,19 @@ use ureq::rustls::{
 };
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
-use xrouter_clients_openai::{
-    DeepSeekClient, GigachatClient, MockProviderClient, OpenAiClient, OpenRouterClient,
-    XrouterClient, YandexResponsesClient, ZaiClient, build_http_client,
-    build_http_client_insecure_tls,
-};
 use xrouter_contracts::{
     ChatCompletionsRequest, ChatCompletionsResponse, ResponseEvent, ResponseOutputItem,
     ResponsesRequest, ResponsesResponse,
 };
-use xrouter_core::{
-    CoreError, ExecutionEngine, ModelDescriptor, ProviderClient, default_model_catalog,
-    synthesize_model_id,
-};
+use xrouter_core::{CoreError, ExecutionEngine, ModelDescriptor, synthesize_model_id};
 
+mod app_state;
 pub mod config;
+mod http;
+pub use app_state::AppState;
+
+use crate::http::auth::resolve_byok_bearer;
+use crate::http::errors::error_response;
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 struct HealthResponse {
@@ -99,7 +97,7 @@ struct XrouterModelsResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-struct ErrorResponse {
+pub(crate) struct ErrorResponse {
     error: String,
 }
 
@@ -323,7 +321,7 @@ impl Default for OpenRouterArchitecture {
     }
 }
 
-fn fetch_openrouter_models(
+pub(crate) fn fetch_openrouter_models(
     provider_config: &config::ProviderConfig,
     supported_ids: &[String],
     connect_timeout_seconds: u64,
@@ -418,7 +416,7 @@ fn map_openrouter_models(
         .collect::<Vec<_>>()
 }
 
-fn fallback_openrouter_models(model_ids: &[String]) -> Vec<ModelDescriptor> {
+pub(crate) fn fallback_openrouter_models(model_ids: &[String]) -> Vec<ModelDescriptor> {
     model_ids
         .iter()
         .map(|id| ModelDescriptor {
@@ -442,7 +440,7 @@ fn fallback_openrouter_models(model_ids: &[String]) -> Vec<ModelDescriptor> {
         .collect()
 }
 
-fn fetch_provider_model_ids(
+pub(crate) fn fetch_provider_model_ids(
     provider_name: &str,
     provider_config: &config::ProviderConfig,
     connect_timeout_seconds: u64,
@@ -512,7 +510,7 @@ fn fetch_provider_model_ids(
     }
 }
 
-fn fetch_xrouter_models(
+pub(crate) fn fetch_xrouter_models(
     provider_config: &config::ProviderConfig,
     connect_timeout_seconds: u64,
 ) -> Option<Vec<ModelDescriptor>> {
@@ -695,7 +693,7 @@ fn fetch_gigachat_model_ids(
     }
 }
 
-fn build_models_from_registry(
+pub(crate) fn build_models_from_registry(
     provider: &str,
     provider_model_ids: &[String],
     registry_seed: &[ModelDescriptor],
@@ -791,363 +789,6 @@ fn yandex_fallback_model_descriptor(id: &str) -> ModelDescriptor {
         top_provider_context_length: 32_768,
         is_moderated: true,
         max_completion_tokens: 8_192,
-    }
-}
-
-#[derive(Clone)]
-pub struct AppState {
-    openai_compatible_api: bool,
-    default_provider: String,
-    models: Vec<ModelDescriptor>,
-    engines: HashMap<String, Arc<ExecutionEngine>>,
-}
-
-impl AppState {
-    pub fn from_config(config: &config::AppConfig) -> Self {
-        let enabled_providers = config
-            .providers
-            .iter()
-            .filter_map(|(name, provider_config)| provider_config.enabled.then_some(name.clone()))
-            .collect::<HashSet<_>>();
-        info!(
-            event = "app.config.loaded",
-            openai_compatible_api = config.openai_compatible_api,
-            provider_total = config.providers.len(),
-            provider_enabled = enabled_providers.len()
-        );
-        debug!(event = "app.config.providers", enabled_providers = ?enabled_providers);
-
-        let mut engines = HashMap::new();
-        let shared_http_client =
-            if cfg!(test) { None } else { build_http_client(config.provider_timeout_seconds) };
-        for (provider, provider_config) in &config.providers {
-            if !provider_config.enabled {
-                continue;
-            }
-            let client: Arc<dyn ProviderClient> = if cfg!(test) {
-                Arc::new(MockProviderClient::new(provider.to_string()))
-            } else {
-                match provider.as_str() {
-                    "openrouter" => Arc::new(OpenRouterClient::new(
-                        provider_config.base_url.clone(),
-                        provider_config.api_key.clone(),
-                        shared_http_client.clone(),
-                        Some(config.provider_max_inflight),
-                    )),
-                    "deepseek" => Arc::new(DeepSeekClient::new(
-                        provider_config.base_url.clone(),
-                        provider_config.api_key.clone(),
-                        shared_http_client.clone(),
-                        Some(config.provider_max_inflight),
-                    )),
-                    "zai" => Arc::new(ZaiClient::new(
-                        provider_config.base_url.clone(),
-                        provider_config.api_key.clone(),
-                        shared_http_client.clone(),
-                        Some(config.provider_max_inflight),
-                    )),
-                    "yandex" => Arc::new(YandexResponsesClient::new(
-                        provider_config.base_url.clone(),
-                        provider_config.api_key.clone(),
-                        provider_config.project.clone(),
-                        shared_http_client.clone(),
-                        Some(config.provider_max_inflight),
-                    )),
-                    "gigachat" => Arc::new(GigachatClient::new(
-                        provider_config.base_url.clone(),
-                        provider_config.api_key.clone(),
-                        None,
-                        if config.gigachat_insecure_tls {
-                            build_http_client_insecure_tls(config.provider_timeout_seconds)
-                        } else {
-                            shared_http_client.clone()
-                        },
-                        Some(config.provider_max_inflight),
-                    )),
-                    "xrouter" => Arc::new(XrouterClient::new(
-                        provider_config.base_url.clone(),
-                        provider_config.api_key.clone(),
-                        shared_http_client.clone(),
-                        Some(config.provider_max_inflight),
-                    )),
-                    _ => Arc::new(OpenAiClient::new(
-                        provider.to_string(),
-                        provider_config.base_url.clone(),
-                        provider_config.api_key.clone(),
-                        shared_http_client.clone(),
-                        Some(config.provider_max_inflight),
-                    )),
-                }
-            };
-            let engine = Arc::new(ExecutionEngine::new(client));
-            engines.insert(provider.to_string(), engine);
-        }
-        info!(event = "app.engines.initialized", engine_count = engines.len());
-        debug!(
-            event = "app.engines.providers",
-            providers = ?engines.keys().collect::<Vec<_>>()
-        );
-
-        let default_catalog = default_model_catalog();
-        let mut models = default_catalog
-            .clone()
-            .into_iter()
-            .filter(|entry| {
-                enabled_providers.contains(&entry.provider)
-                    && entry.provider != "openrouter"
-                    && entry.provider != "zai"
-                    && entry.provider != "yandex"
-                    && entry.provider != "gigachat"
-                    && entry.provider != "xrouter"
-            })
-            .collect::<Vec<_>>();
-
-        if enabled_providers.contains("openrouter")
-            && let Some(openrouter_config) = config.providers.get("openrouter")
-        {
-            if cfg!(test) {
-                models.extend(fallback_openrouter_models(&config.openrouter_supported_models));
-            } else if let Some(fetched) = fetch_openrouter_models(
-                openrouter_config,
-                &config.openrouter_supported_models,
-                config.provider_timeout_seconds,
-            ) {
-                info!(
-                    event = "openrouter.models.loaded",
-                    source = "remote",
-                    model_count = fetched.len()
-                );
-                models.extend(fetched);
-            } else {
-                warn!(
-                    event = "openrouter.models.loaded",
-                    source = "fallback",
-                    reason = "fetch_failed",
-                    model_count = config.openrouter_supported_models.len()
-                );
-                models.extend(fallback_openrouter_models(&config.openrouter_supported_models));
-            }
-        }
-
-        if enabled_providers.contains("zai")
-            && let Some(zai_config) = config.providers.get("zai")
-        {
-            if cfg!(test) {
-                models.extend(
-                    default_catalog
-                        .iter()
-                        .filter(|model| model.provider == "zai")
-                        .cloned()
-                        .collect::<Vec<_>>(),
-                );
-            } else if let Some(zai_model_ids) = fetch_provider_model_ids(
-                "zai",
-                zai_config,
-                config.provider_timeout_seconds,
-                config.gigachat_insecure_tls,
-            ) {
-                let zai_models =
-                    build_models_from_registry("zai", &zai_model_ids, &default_catalog);
-                info!(
-                    event = "zai.models.loaded",
-                    source = "remote",
-                    model_count = zai_models.len()
-                );
-                models.extend(zai_models);
-            } else {
-                warn!(event = "zai.models.loaded", source = "fallback", reason = "fetch_failed");
-                models.extend(
-                    default_catalog
-                        .iter()
-                        .filter(|model| model.provider == "zai")
-                        .cloned()
-                        .collect::<Vec<_>>(),
-                );
-            }
-        }
-
-        if enabled_providers.contains("yandex")
-            && let Some(yandex_config) = config.providers.get("yandex")
-        {
-            if cfg!(test) {
-                models.extend(
-                    default_catalog
-                        .iter()
-                        .filter(|model| model.provider == "yandex")
-                        .cloned()
-                        .collect::<Vec<_>>(),
-                );
-            } else if let Some(yandex_model_ids) = fetch_provider_model_ids(
-                "yandex",
-                yandex_config,
-                config.provider_timeout_seconds,
-                config.gigachat_insecure_tls,
-            ) {
-                let yandex_models =
-                    build_models_from_registry("yandex", &yandex_model_ids, &default_catalog);
-                info!(
-                    event = "yandex.models.loaded",
-                    source = "remote",
-                    model_count = yandex_models.len()
-                );
-                models.extend(yandex_models);
-            } else {
-                warn!(event = "yandex.models.loaded", source = "fallback", reason = "fetch_failed");
-                models.extend(
-                    default_catalog
-                        .iter()
-                        .filter(|model| model.provider == "yandex")
-                        .cloned()
-                        .collect::<Vec<_>>(),
-                );
-            }
-        }
-
-        if enabled_providers.contains("gigachat")
-            && let Some(gigachat_config) = config.providers.get("gigachat")
-        {
-            if cfg!(test) {
-                models.extend(
-                    default_catalog
-                        .iter()
-                        .filter(|model| model.provider == "gigachat")
-                        .cloned()
-                        .collect::<Vec<_>>(),
-                );
-            } else if let Some(gigachat_model_ids) = fetch_provider_model_ids(
-                "gigachat",
-                gigachat_config,
-                config.provider_timeout_seconds,
-                config.gigachat_insecure_tls,
-            ) {
-                let supported = config
-                    .gigachat_supported_models
-                    .iter()
-                    .map(|id| id.strip_prefix("gigachat/").unwrap_or(id.as_str()))
-                    .collect::<HashSet<_>>();
-                let filtered_ids = gigachat_model_ids
-                    .into_iter()
-                    .filter(|id| supported.contains(id.as_str()))
-                    .collect::<Vec<_>>();
-                let gigachat_models =
-                    build_models_from_registry("gigachat", &filtered_ids, &default_catalog);
-                info!(
-                    event = "gigachat.models.loaded",
-                    source = "remote",
-                    model_count = gigachat_models.len(),
-                    configured_count = config.gigachat_supported_models.len()
-                );
-                models.extend(gigachat_models);
-            } else {
-                warn!(
-                    event = "gigachat.models.loaded",
-                    source = "none",
-                    reason = "fetch_failed_no_fallback"
-                );
-            }
-        }
-
-        if enabled_providers.contains("xrouter")
-            && let Some(xrouter_config) = config.providers.get("xrouter")
-        {
-            if cfg!(test) {
-                models.extend(
-                    default_catalog
-                        .iter()
-                        .filter(|model| model.provider == "xrouter")
-                        .cloned()
-                        .collect::<Vec<_>>(),
-                );
-            } else if let Some(xrouter_models) =
-                fetch_xrouter_models(xrouter_config, config.provider_timeout_seconds)
-            {
-                info!(
-                    event = "xrouter.models.loaded",
-                    source = "remote",
-                    model_count = xrouter_models.len()
-                );
-                models.extend(xrouter_models);
-            } else {
-                warn!(
-                    event = "xrouter.models.loaded",
-                    source = "fallback",
-                    reason = "fetch_failed"
-                );
-                models.extend(
-                    default_catalog
-                        .iter()
-                        .filter(|model| model.provider == "xrouter")
-                        .cloned()
-                        .collect::<Vec<_>>(),
-                );
-            }
-        }
-        info!(event = "models.registry.loaded", model_count = models.len());
-        debug!(
-            event = "models.registry.entries",
-            model_ids = ?models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>()
-        );
-
-        let default_provider = if models.iter().any(|entry| entry.provider == "openrouter") {
-            "openrouter".to_string()
-        } else {
-            models
-                .first()
-                .map(|entry| entry.provider.clone())
-                .unwrap_or_else(|| "openrouter".to_string())
-        };
-
-        Self {
-            openai_compatible_api: config.openai_compatible_api,
-            default_provider,
-            models,
-            engines,
-        }
-    }
-
-    pub fn new() -> Self {
-        Self::from_config(&config::AppConfig::for_tests())
-    }
-
-    fn resolve_provider_key(&self, model: &str) -> String {
-        if let Some((candidate, _rest)) = model.split_once('/')
-            && self.engines.contains_key(candidate)
-        {
-            return candidate.to_string();
-        }
-
-        if let Some(found) = self.models.iter().find(|m| m.id == model) {
-            return found.provider.clone();
-        }
-        if let Some(found) =
-            self.models.iter().find(|m| synthesize_model_id(&m.provider, &m.id) == model)
-        {
-            return found.provider.clone();
-        }
-
-        self.default_provider.clone()
-    }
-
-    fn resolve_provider_model_id(&self, model: &str) -> String {
-        if let Some((provider, provider_model)) = model.split_once('/')
-            && self.engines.contains_key(provider)
-        {
-            return provider_model.to_string();
-        }
-        model.to_string()
-    }
-
-    fn resolve_engine(&self, model: &str) -> Result<Arc<ExecutionEngine>, CoreError> {
-        let key = self.resolve_provider_key(model);
-        self.engines.get(&key).cloned().ok_or_else(|| {
-            CoreError::Validation(format!("unsupported provider for model: {model}"))
-        })
-    }
-}
-
-impl Default for AppState {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -1344,6 +985,15 @@ async fn post_responses(
     let provider = state.resolve_provider_key(&request.model);
     let provider_model = state.resolve_provider_model_id(&request.model);
     let public_model_id = synthesize_model_id(&provider, &provider_model);
+    let auth_bearer = match resolve_byok_bearer(
+        &headers,
+        state.byok_enabled,
+        provider.as_str(),
+        route.as_str(),
+    ) {
+        Ok(token) => token,
+        Err(err) => return error_response(err),
+    };
     request_span.record("model", public_model_id.as_str());
     request_span.record("provider", provider.as_str());
     request_span.record("stream", request.stream);
@@ -1425,116 +1075,123 @@ async fn post_responses(
             }
         });
 
-        let stream = engine.execute_stream(request, None).flat_map(move |event| {
-            let mut events = Vec::<Result<Event, Infallible>>::new();
-            if let Ok(ref mapped) = event {
-                if let Some(request_id) = response_event_request_id(mapped) {
-                    stream_request_span.record("request.id", request_id);
-                    stream_request_span.record("response.id", request_id);
-                }
-                record_response_event_classification(
-                    stream_route.as_str(),
-                    stream_provider.as_str(),
-                    "responses_sse",
-                    mapped,
-                );
-            }
-            match event {
-                Ok(ResponseEvent::OutputTextDelta { delta, .. }) => {
-                    events.push(Ok(Event::default().event("response.output_text.delta").data(
-                        json!({
-                            "type": "response.output_text.delta",
-                            "output_index": 0,
-                            "item_id": "msg_0",
-                            "content_index": 0,
-                            "delta": delta
-                        })
-                        .to_string(),
-                    )));
-                }
-                Ok(ResponseEvent::ReasoningDelta { delta, .. }) => {
-                    events.push(Ok(Event::default().event("response.reasoning.delta").data(
-                        json!({
-                            "type": "response.reasoning.delta",
-                            "delta": delta
-                        })
-                        .to_string(),
-                    )));
-                }
-                Ok(ResponseEvent::ResponseCompleted { output, finish_reason, usage, .. }) => {
-                    let reasoning = extract_reasoning_from_output(&output);
-                    info!(
-                        event = "http.stream.completed",
-                        route = stream_route,
-                        response_id = %response_id,
-                        provider = %stream_provider,
-                        finish_reason = %finish_reason,
-                        reasoning_present = reasoning.is_some(),
-                        reasoning_chars = reasoning.as_ref().map(|it| it.len()).unwrap_or(0),
-                        input_tokens = usage.input_tokens,
-                        output_tokens = usage.output_tokens,
-                        total_tokens = usage.total_tokens,
-                        duration_ms = started_at.elapsed().as_millis() as u64
+        let stream = engine.execute_stream_with_auth(request, None, auth_bearer.clone()).flat_map(
+            move |event| {
+                let mut events = Vec::<Result<Event, Infallible>>::new();
+                if let Ok(ref mapped) = event {
+                    if let Some(request_id) = response_event_request_id(mapped) {
+                        stream_request_span.record("request.id", request_id);
+                        stream_request_span.record("response.id", request_id);
+                    }
+                    record_response_event_classification(
+                        stream_route.as_str(),
+                        stream_provider.as_str(),
+                        "responses_sse",
+                        mapped,
                     );
-                    for (output_index, item) in output.iter().enumerate() {
-                        events.push(Ok(Event::default().event("response.output_item.done").data(
+                }
+                match event {
+                    Ok(ResponseEvent::OutputTextDelta { delta, .. }) => {
+                        events.push(Ok(Event::default().event("response.output_text.delta").data(
                             json!({
-                                "type": "response.output_item.done",
-                                "output_index": output_index,
-                                "item": item
+                                "type": "response.output_text.delta",
+                                "output_index": 0,
+                                "item_id": "msg_0",
+                                "content_index": 0,
+                                "delta": delta
                             })
                             .to_string(),
                         )));
                     }
-                    events.push(Ok(Event::default().event("response.completed").data(
-                        json!({
-                            "type": "response.completed",
-                            "response": {
-                                "id": response_id,
-                                "status": "completed",
-                                "output": output,
-                                "finish_reason": finish_reason,
-                                "usage": {
-                                    "input_tokens": usage.input_tokens,
-                                    "output_tokens": usage.output_tokens,
-                                    "total_tokens": usage.total_tokens
+                    Ok(ResponseEvent::ReasoningDelta { delta, .. }) => {
+                        events.push(Ok(Event::default().event("response.reasoning.delta").data(
+                            json!({
+                                "type": "response.reasoning.delta",
+                                "delta": delta
+                            })
+                            .to_string(),
+                        )));
+                    }
+                    Ok(ResponseEvent::ResponseCompleted {
+                        output, finish_reason, usage, ..
+                    }) => {
+                        let reasoning = extract_reasoning_from_output(&output);
+                        info!(
+                            event = "http.stream.completed",
+                            route = stream_route,
+                            response_id = %response_id,
+                            provider = %stream_provider,
+                            finish_reason = %finish_reason,
+                            reasoning_present = reasoning.is_some(),
+                            reasoning_chars = reasoning.as_ref().map(|it| it.len()).unwrap_or(0),
+                            input_tokens = usage.input_tokens,
+                            output_tokens = usage.output_tokens,
+                            total_tokens = usage.total_tokens,
+                            duration_ms = started_at.elapsed().as_millis() as u64
+                        );
+                        for (output_index, item) in output.iter().enumerate() {
+                            events.push(Ok(Event::default()
+                                .event("response.output_item.done")
+                                .data(
+                                    json!({
+                                        "type": "response.output_item.done",
+                                        "output_index": output_index,
+                                        "item": item
+                                    })
+                                    .to_string(),
+                                )));
+                        }
+                        events.push(Ok(Event::default().event("response.completed").data(
+                            json!({
+                                "type": "response.completed",
+                                "response": {
+                                    "id": response_id,
+                                    "status": "completed",
+                                    "output": output,
+                                    "finish_reason": finish_reason,
+                                    "usage": {
+                                        "input_tokens": usage.input_tokens,
+                                        "output_tokens": usage.output_tokens,
+                                        "total_tokens": usage.total_tokens
+                                    }
                                 }
-                            }
-                        })
-                        .to_string(),
-                    )));
+                            })
+                            .to_string(),
+                        )));
+                    }
+                    Ok(ResponseEvent::ResponseError { message, .. }) => {
+                        stream_request_span.set_status(Status::error(message.clone()));
+                        warn!(
+                            event = "http.stream.failed",
+                            route = stream_route,
+                            response_id = %response_id,
+                            provider = %stream_provider,
+                            duration_ms = started_at.elapsed().as_millis() as u64,
+                            error = %message
+                        );
+                        events.push(Ok(Event::default().event("response.error").data(
+                            json!({"type": "response.error", "error": message}).to_string(),
+                        )));
+                    }
+                    Err(error) => {
+                        stream_request_span.set_status(Status::error(error.to_string()));
+                        warn!(
+                            event = "http.stream.failed",
+                            route = stream_route,
+                            response_id = %response_id,
+                            provider = %stream_provider,
+                            duration_ms = started_at.elapsed().as_millis() as u64,
+                            error = %error
+                        );
+                        events.push(Ok(Event::default().event("response.error").data(
+                            json!({"type": "response.error", "error": error.to_string()})
+                                .to_string(),
+                        )));
+                    }
                 }
-                Ok(ResponseEvent::ResponseError { message, .. }) => {
-                    stream_request_span.set_status(Status::error(message.clone()));
-                    warn!(
-                        event = "http.stream.failed",
-                        route = stream_route,
-                        response_id = %response_id,
-                        provider = %stream_provider,
-                        duration_ms = started_at.elapsed().as_millis() as u64,
-                        error = %message
-                    );
-                    events.push(Ok(Event::default()
-                        .event("response.error")
-                        .data(json!({"type": "response.error", "error": message}).to_string())));
-                }
-                Err(error) => {
-                    stream_request_span.set_status(Status::error(error.to_string()));
-                    warn!(
-                        event = "http.stream.failed",
-                        route = stream_route,
-                        response_id = %response_id,
-                        provider = %stream_provider,
-                        duration_ms = started_at.elapsed().as_millis() as u64,
-                        error = %error
-                    );
-                    events.push(Ok(Event::default().event("response.error").data(
-                        json!({"type": "response.error", "error": error.to_string()}).to_string(),
-                    )));
-                }
-            }
-            futures::stream::iter(events)
-        });
+                futures::stream::iter(events)
+            },
+        );
 
         let bootstrap = futures::stream::iter(vec![
             Ok::<Event, Infallible>(
@@ -1555,7 +1212,7 @@ async fn post_responses(
         return Sse::new(full_stream).into_response();
     }
 
-    match run_responses_request(engine, request).await {
+    match run_responses_request(engine, request, auth_bearer).await {
         Ok(mut resp) => {
             resp.id = ensure_id_prefix(&resp.id, "resp_");
             request_span.record("request.id", resp.id.as_str());
@@ -1644,6 +1301,15 @@ async fn post_chat_completions(
     let provider = state.resolve_provider_key(&core_request.model);
     let provider_model = state.resolve_provider_model_id(&core_request.model);
     let public_model_id = synthesize_model_id(&provider, &provider_model);
+    let auth_bearer = match resolve_byok_bearer(
+        &headers,
+        state.byok_enabled,
+        provider.as_str(),
+        "/api/v1/chat/completions",
+    ) {
+        Ok(token) => token,
+        Err(err) => return error_response(err),
+    };
     request_span.record("model", public_model_id.as_str());
     request_span.record("provider", provider.as_str());
     request_span.record("stream", request.stream);
@@ -1691,7 +1357,9 @@ async fn post_chat_completions(
         let stream_route = "/api/v1/chat/completions".to_string();
         let stream_request_span = request_span.clone();
         let stream_started_at = started_at;
-        let stream = engine.execute_stream(core_request, None).map(move |evt| {
+        let stream = engine
+            .execute_stream_with_auth(core_request, None, auth_bearer.clone())
+            .map(move |evt| {
             if let Ok(ref mapped) = evt {
                 if let Some(request_id) = response_event_request_id(mapped) {
                     stream_request_span.record("request.id", request_id);
@@ -1793,14 +1461,15 @@ async fn post_chat_completions(
                 Ok(Event::default()
                     .data(json!({"id": chat_completion_id.clone(), "error": error.to_string()}).to_string()))
             }
-        }});
+            }
+            });
 
         let done =
             futures::stream::iter(vec![Ok::<Event, Infallible>(Event::default().data("[DONE]"))]);
         return Sse::new(stream.chain(done)).into_response();
     }
 
-    match run_responses_request(engine, core_request).await {
+    match run_responses_request(engine, core_request, auth_bearer).await {
         Ok(mut resp) => {
             resp.id = ensure_id_prefix(&resp.id, "resp_");
             request_span.record("request.id", resp.id.as_str());
@@ -1851,8 +1520,9 @@ async fn post_chat_completions(
 async fn run_responses_request(
     engine: Arc<ExecutionEngine>,
     request: ResponsesRequest,
+    auth_bearer: Option<String>,
 ) -> Result<ResponsesResponse, CoreError> {
-    engine.execute(request).await
+    engine.execute_with_auth(request, auth_bearer).await
 }
 
 struct HeaderMapExtractor<'a>(&'a HeaderMap);
@@ -1928,28 +1598,6 @@ fn first_function_tool_name(output: &[ResponseOutputItem]) -> Option<&str> {
         }
         _ => None,
     })
-}
-
-fn error_response(err: CoreError) -> Response {
-    let status = match &err {
-        CoreError::Provider(message) if is_provider_overloaded(message) => {
-            axum::http::StatusCode::TOO_MANY_REQUESTS
-        }
-        _ => axum::http::StatusCode::BAD_REQUEST,
-    };
-    match &err {
-        CoreError::Validation(_) | CoreError::Provider(_) => {
-            warn!(event = "http.error_response", error = %err);
-        }
-        CoreError::ClientDisconnected(_) => {
-            error!(event = "http.error_response", error = %err);
-        }
-    }
-    (status, Json(ErrorResponse { error: err.to_string() })).into_response()
-}
-
-fn is_provider_overloaded(message: &str) -> bool {
-    message.starts_with("provider overloaded:")
 }
 
 fn ensure_id_prefix(id: &str, prefix: &str) -> String {
@@ -2121,7 +1769,7 @@ mod tests {
 
     #[test]
     fn build_models_from_registry_uses_seed_and_fallback_for_unknown_ids() {
-        let seed = default_model_catalog();
+        let seed = xrouter_core::default_model_catalog();
         let ids = vec!["glm-4.5".to_string(), "glm-4.6".to_string(), "glm-5".to_string()];
         let models = build_models_from_registry("zai", &ids, &seed);
         assert_eq!(models.len(), 3);
@@ -2845,6 +2493,77 @@ json.first_id=<none>
             .and_then(Value::as_str)
             .unwrap_or("");
         assert!(!reasoning.is_empty(), "expected reasoning in chat message for reasoner model");
+    }
+
+    #[test]
+    fn parse_bearer_token_accepts_case_insensitive_scheme() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "bEaReR test-token".parse().expect("header value must parse"),
+        );
+        assert_eq!(crate::http::auth::parse_bearer_token(&headers).as_deref(), Some("test-token"));
+    }
+
+    #[test]
+    fn resolve_byok_bearer_requires_authorization_header() {
+        let headers = HeaderMap::new();
+        let result =
+            crate::http::auth::resolve_byok_bearer(&headers, true, "deepseek", "/api/v1/responses");
+        assert!(matches!(result, Err(CoreError::Validation(_))));
+    }
+
+    #[test]
+    fn resolve_byok_bearer_rejects_yandex_provider() {
+        let headers = HeaderMap::new();
+        let result =
+            crate::http::auth::resolve_byok_bearer(&headers, true, "yandex", "/api/v1/responses");
+        assert!(matches!(result, Err(CoreError::Validation(_))));
+    }
+
+    #[tokio::test]
+    async fn byok_enabled_requires_bearer_header() {
+        let mut config = crate::config::AppConfig::for_tests();
+        config.byok_enabled = true;
+        let app = build_router(AppState::from_config(&config));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/responses")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"model":"deepseek/deepseek-chat","input":"hello","stream":false}"#,
+                    ))
+                    .expect("request must build"),
+            )
+            .await
+            .expect("request must complete");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn byok_enabled_accepts_bearer_header() {
+        let mut config = crate::config::AppConfig::for_tests();
+        config.byok_enabled = true;
+        let app = build_router(AppState::from_config(&config));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/responses")
+                    .header("content-type", "application/json")
+                    .header(axum::http::header::AUTHORIZATION, "Bearer test-token")
+                    .body(Body::from(
+                        r#"{"model":"deepseek/deepseek-chat","input":"hello","stream":false}"#,
+                    ))
+                    .expect("request must build"),
+            )
+            .await
+            .expect("request must complete");
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[test]

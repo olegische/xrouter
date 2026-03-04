@@ -61,6 +61,8 @@ Provider checks:
 just models <provider>
 just smoke <provider>
 just smoke-stream <provider>
+just smoke-byok <provider>
+just smoke-byok-stream <provider>
 ```
 
 ## Supported Providers
@@ -80,11 +82,32 @@ Key environment variables:
 - `XR_HOST` (default: `127.0.0.1`)
 - `XR_PORT` (default: `3000`)
 - `ENABLE_OPENAI_COMPATIBLE_API` (default: `false`)
-- `<PROVIDER>_ENABLED`, `<PROVIDER>_API_KEY`, `<PROVIDER>_BASE_URL`
+- `XR_BYOK_ENABLED` (default: `false`)
+- `<PROVIDER>_ENABLED`, `<PROVIDER>_BASE_URL`
+- credentials:
+  - most providers: `<PROVIDER>_API_KEY`
+  - gigachat: `GIGACHAT_CREDENTIALS` (OAuth credentials)
 
 `<PROVIDER>` should match one of the prefixes above (for example, `OPENROUTER`, `DEEPSEEK`, `GIGACHAT`).
 
 Details: `xrouter/docs/configuration.md`.
+
+### BYOK
+
+`XR_BYOK_ENABLED=true` enables strict BYOK mode:
+
+- request must include `Authorization: Bearer <token>`;
+- router does not fallback to configured provider keys;
+- `gigachat` expects a ready access token from client;
+- `yandex` BYOK is not supported and returns `400`.
+
+Smoke examples:
+
+```bash
+XR_BYOK_ENABLED=true BYOK_API_KEY=<token> just smoke-byok deepseek
+XR_BYOK_ENABLED=true BYOK_API_KEY=<token> just smoke-byok-stream deepseek
+XR_BYOK_ENABLED=true BYOK_API_KEY=<any> just smoke-byok yandex
+```
 
 ## API Modes
 
