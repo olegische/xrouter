@@ -1,10 +1,10 @@
-# xrouter Refactor Plan for Portability and Modular Architecture
+# xrouter WASM Track Plan
 
-This document describes the implementation plan for preparing `xrouter` for future portability
-features such as browser/WASM reuse, while delivering immediate architectural improvements for the
-native server.
+This document describes the WASM/browser-specific implementation plan for `xrouter`.
 
-The plan assumes that the architecture in `docs/ARCHITECTURE.md` is the target state.
+The canonical repository architecture lives in the root `ARCHITECTURE.md`.
+This plan assumes that the WASM-specific target architecture in `docs/wasm/ARCHITECTURE.md` is the
+target state for this track.
 
 The key idea is simple:
 
@@ -439,7 +439,7 @@ These run through multiple phases.
 
 Update in the same PR when boundaries change:
 
-- `docs/ARCHITECTURE.md`
+- `docs/wasm/ARCHITECTURE.md`
 - `docs/testing.md`
 - `docs/configuration.md` if config surfaces move
 - formal docs if lifecycle semantics ever change
