@@ -4,6 +4,7 @@ mod http;
 mod startup;
 pub use app_state::AppState;
 pub use http::docs::build_router;
+pub use startup::app_builder::AppBuilder;
 
 #[cfg(test)]
 mod tests {
@@ -21,7 +22,7 @@ mod tests {
         OpenRouterModelsResponse, XrouterProviderModelsResponse, build_models_from_registry,
         fetch_openrouter_models, map_openrouter_models, map_xrouter_models,
     };
-    use crate::{AppState, build_router, http::errors::error_response};
+    use crate::{AppBuilder, AppState, build_router, http::errors::error_response};
     use xrouter_core::CoreError;
 
     #[derive(Debug)]
@@ -310,7 +311,7 @@ mod tests {
     fn test_app_state(openai_compatible_api: bool) -> AppState {
         let mut config = crate::config::AppConfig::for_tests();
         config.openai_compatible_api = openai_compatible_api;
-        AppState::from_config(&config)
+        AppBuilder::new(&config).build_state()
     }
 
     async fn check_fixture(
@@ -506,7 +507,7 @@ text.body=
             provider.enabled = false;
         }
 
-        let app = build_router(AppState::from_config(&config));
+        let app = AppBuilder::new(&config).build_router();
         let response = app
             .oneshot(
                 Request::builder()
@@ -865,7 +866,7 @@ json.first_id=<none>
     async fn byok_enabled_requires_bearer_header() {
         let mut config = crate::config::AppConfig::for_tests();
         config.byok_enabled = true;
-        let app = build_router(AppState::from_config(&config));
+        let app = AppBuilder::new(&config).build_router();
         let response = app
             .oneshot(
                 Request::builder()
@@ -887,7 +888,7 @@ json.first_id=<none>
     async fn byok_enabled_accepts_bearer_header() {
         let mut config = crate::config::AppConfig::for_tests();
         config.byok_enabled = true;
-        let app = build_router(AppState::from_config(&config));
+        let app = AppBuilder::new(&config).build_router();
         let response = app
             .oneshot(
                 Request::builder()

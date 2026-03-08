@@ -79,21 +79,23 @@ Exit criteria:
 
 Status:
 
-- pending
+- completed
 
 Objective:
 
 - introduce an explicit builder layer for application assembly
 
-Work:
+Completed work:
 
-1. Add `AppBuilder` or `StartupBuilder`.
-2. Make startup dependencies explicit:
-   - config
-   - provider factory
-   - model catalog service
-   - router assembly
-3. Keep alternate composition paths out of `AppState`.
+- introduced `AppBuilder` as the application assembly layer
+- made startup dependencies explicit inside the builder:
+  - config
+  - provider factory
+  - model catalog service
+  - router assembly
+- switched `main` to assemble the app through `AppBuilder`
+- reduced `AppState::from_config` to a compatibility wrapper over the builder
+- kept routing behavior unchanged while moving composition out of `AppState`
 
 Exit criteria:
 

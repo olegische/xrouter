@@ -1,15 +1,8 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
-use tracing::{debug, info};
 use xrouter_core::{CoreError, ExecutionEngine, ModelDescriptor, synthesize_model_id};
 
-use crate::{
-    config,
-    startup::{model_catalog::load_models, provider_factory::build_engines},
-};
+use crate::{config, startup::app_builder::AppBuilder};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -22,23 +15,19 @@ pub struct AppState {
 
 impl AppState {
     pub fn from_config(config: &config::AppConfig) -> Self {
-        let enabled_providers = config
-            .providers
-            .iter()
-            .filter_map(|(name, provider_config)| provider_config.enabled.then_some(name.clone()))
-            .collect::<HashSet<_>>();
-        info!(
-            event = "app.config.loaded",
-            openai_compatible_api = config.openai_compatible_api,
-            byok_enabled = config.byok_enabled,
-            provider_total = config.providers.len(),
-            provider_enabled = enabled_providers.len()
-        );
-        debug!(event = "app.config.providers", enabled_providers = ?enabled_providers);
+        AppBuilder::new(config).build_state()
+    }
 
-        let engines = build_engines(config);
-        let models = load_models(config, &enabled_providers);
+    pub fn new() -> Self {
+        Self::from_config(&config::AppConfig::for_tests())
+    }
 
+    pub(crate) fn from_parts(
+        openai_compatible_api: bool,
+        byok_enabled: bool,
+        models: Vec<ModelDescriptor>,
+        engines: HashMap<String, Arc<ExecutionEngine>>,
+    ) -> Self {
         let default_provider = if models.iter().any(|entry| entry.provider == "openrouter") {
             "openrouter".to_string()
         } else {
@@ -48,17 +37,7 @@ impl AppState {
                 .unwrap_or_else(|| "openrouter".to_string())
         };
 
-        Self {
-            openai_compatible_api: config.openai_compatible_api,
-            byok_enabled: config.byok_enabled,
-            default_provider,
-            models,
-            engines,
-        }
-    }
-
-    pub fn new() -> Self {
-        Self::from_config(&config::AppConfig::for_tests())
+        Self { openai_compatible_api, byok_enabled, default_provider, models, engines }
     }
 
     pub(crate) fn resolve_provider_key(&self, model: &str) -> String {

@@ -1,3 +1,4 @@
+pub(crate) mod app_builder;
 pub(crate) mod model_catalog;
 pub(crate) mod model_catalog_remote;
 pub(crate) mod model_catalog_sources;
