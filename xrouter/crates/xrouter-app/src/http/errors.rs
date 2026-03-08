@@ -5,7 +5,7 @@ use axum::{
 use tracing::{error, warn};
 use xrouter_core::CoreError;
 
-use crate::ErrorResponse;
+use crate::http::docs::ErrorResponse;
 
 pub(crate) fn error_response(err: CoreError) -> Response {
     let status = match &err {
