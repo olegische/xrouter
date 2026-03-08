@@ -105,18 +105,29 @@ Exit criteria:
 
 Status:
 
-- pending
+- in progress
 
 Objective:
 
 - remove runtime-specific assumptions from core-facing APIs
 
-Work:
+Completed work:
 
-1. audit `tokio` types in public signatures
-2. isolate stream/output boundaries behind typed abstractions
-3. keep lifecycle semantics aligned with the formal model
-4. reduce direct observability coupling in the hot path
+- audited the main runtime-coupled public boundaries in `xrouter-core`
+- replaced the provider stream request dependency on `tokio::mpsc::Sender` with a core-owned
+  `ResponseEventSink` abstraction
+- replaced the public `ReceiverStream` return type in `ExecutionEngine::execute_stream*` with a
+  core-owned stream alias
+- kept `ExecutionEngine::execute_stream*` behavior unchanged by adapting the existing Tokio stream
+  path behind a private sink wrapper
+- updated `xrouter-clients-openai` to depend on the core sink abstraction instead of Tokio sender
+  types
+
+Remaining work:
+
+1. isolate remaining runtime stream/output boundaries behind typed abstractions
+2. keep lifecycle semantics aligned with the formal model
+3. reduce direct observability coupling in the hot path
 
 Exit criteria:
 

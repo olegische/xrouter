@@ -1,6 +1,7 @@
 use std::{sync::Arc, time::Instant};
 
 use async_trait::async_trait;
+use futures::{StreamExt, stream::BoxStream};
 use opentelemetry::trace::Status;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -376,6 +377,13 @@ pub trait ProviderClient: Send + Sync {
     }
 }
 
+#[async_trait]
+pub trait ResponseEventSink: Send + Sync {
+    async fn send(&self, event: Result<ResponseEvent, CoreError>);
+}
+
+pub type ResponseEventStream = BoxStream<'static, Result<ResponseEvent, CoreError>>;
+
 #[derive(Debug, Clone, Copy)]
 pub struct ProviderGenerateRequest<'a> {
     pub model: &'a str,
@@ -386,11 +394,11 @@ pub struct ProviderGenerateRequest<'a> {
     pub auth_bearer: Option<&'a str>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct ProviderGenerateStreamRequest<'a> {
     pub request_id: &'a str,
     pub request: ProviderGenerateRequest<'a>,
-    pub sender: Option<&'a mpsc::Sender<Result<ResponseEvent, CoreError>>>,
+    pub sender: Option<&'a dyn ResponseEventSink>,
 }
 
 #[async_trait]
@@ -433,7 +441,7 @@ impl StageHandler for TokenizeHandler {
 
 struct GenerateHandler {
     provider: Arc<dyn ProviderClient>,
-    sender: Option<mpsc::Sender<Result<ResponseEvent, CoreError>>>,
+    sender: Option<Arc<dyn ResponseEventSink>>,
 }
 
 #[async_trait]
@@ -486,7 +494,7 @@ impl StageHandler for GenerateHandler {
                     tool_choice: context.request_tool_choice.as_ref(),
                     auth_bearer: context.auth_bearer.as_deref(),
                 },
-                sender: self.sender.as_ref(),
+                sender: self.sender.as_deref(),
             })
             .instrument(provider_span.clone())
             .await
@@ -528,7 +536,7 @@ impl StageHandler for GenerateHandler {
             && context.client_connected
             && let (Some(reasoning), Some(sender)) = (&context.reasoning, &self.sender)
         {
-            let _ = sender
+            sender
                 .send(Ok(ResponseEvent::ReasoningDelta {
                     id: context.request_id.clone(),
                     delta: reasoning.clone(),
@@ -541,7 +549,7 @@ impl StageHandler for GenerateHandler {
                 && context.client_connected
                 && let Some(sender) = &self.sender
             {
-                let _ = sender
+                sender
                     .send(Ok(ResponseEvent::OutputTextDelta {
                         id: context.request_id.clone(),
                         delta: chunk,
@@ -558,6 +566,17 @@ impl StageHandler for GenerateHandler {
 
 pub struct ExecutionEngine {
     provider: Arc<dyn ProviderClient>,
+}
+
+struct MpscResponseEventSink {
+    sender: mpsc::Sender<Result<ResponseEvent, CoreError>>,
+}
+
+#[async_trait]
+impl ResponseEventSink for MpscResponseEventSink {
+    async fn send(&self, event: Result<ResponseEvent, CoreError>) {
+        let _ = self.sender.send(event).await;
+    }
 }
 
 fn tool_call_id_from_response_id(response_id: &str) -> String {
@@ -663,7 +682,7 @@ impl ExecutionEngine {
         self: Arc<Self>,
         request: ResponsesRequest,
         disconnect_at: Option<StageName>,
-    ) -> ReceiverStream<Result<ResponseEvent, CoreError>> {
+    ) -> ResponseEventStream {
         self.execute_stream_with_auth(request, disconnect_at, None)
     }
 
@@ -672,11 +691,13 @@ impl ExecutionEngine {
         request: ResponsesRequest,
         disconnect_at: Option<StageName>,
         auth_bearer: Option<String>,
-    ) -> ReceiverStream<Result<ResponseEvent, CoreError>> {
+    ) -> ResponseEventStream {
         let (tx, rx) = mpsc::channel(32);
+        let sink: Arc<dyn ResponseEventSink> =
+            Arc::new(MpscResponseEventSink { sender: tx.clone() });
         tokio::spawn(async move {
             let result = self
-                .execute_internal(request, disconnect_at, Some(tx.clone()), auth_bearer)
+                .execute_internal(request, disconnect_at, Some(sink), auth_bearer)
                 .instrument(info_span!("execute_stream"))
                 .await;
             if let Err(e) = result {
@@ -688,14 +709,14 @@ impl ExecutionEngine {
                     .await;
             }
         });
-        ReceiverStream::new(rx)
+        ReceiverStream::new(rx).boxed()
     }
 
     async fn execute_internal(
         &self,
         request: ResponsesRequest,
         disconnect_at: Option<StageName>,
-        sender: Option<mpsc::Sender<Result<ResponseEvent, CoreError>>>,
+        sender: Option<Arc<dyn ResponseEventSink>>,
         auth_bearer: Option<String>,
     ) -> Result<ResponsesResponse, CoreError> {
         let request_started_at = Instant::now();
@@ -777,18 +798,17 @@ impl ExecutionEngine {
         );
 
         if let Some(tx) = sender {
-            let _ = tx
-                .send(Ok(ResponseEvent::ResponseCompleted {
-                    id: context.request_id.clone(),
-                    output: output.clone(),
-                    finish_reason: finish_reason.clone(),
-                    usage: Usage {
-                        input_tokens: context.input_tokens,
-                        output_tokens: context.output_tokens,
-                        total_tokens: context.input_tokens + context.output_tokens,
-                    },
-                }))
-                .await;
+            tx.send(Ok(ResponseEvent::ResponseCompleted {
+                id: context.request_id.clone(),
+                output: output.clone(),
+                finish_reason: finish_reason.clone(),
+                usage: Usage {
+                    input_tokens: context.input_tokens,
+                    output_tokens: context.output_tokens,
+                    total_tokens: context.input_tokens + context.output_tokens,
+                },
+            }))
+            .await;
         }
 
         let response = ResponsesResponse {

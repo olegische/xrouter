@@ -12,7 +12,7 @@ use reqwest::Client;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
-use tokio::sync::{Semaphore, mpsc};
+use tokio::sync::Semaphore;
 use tokio::time::sleep;
 use tracing::{Instrument, debug, field, info_span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -20,7 +20,7 @@ use uuid::Uuid;
 use xrouter_contracts::{
     ResponseEvent, ResponseInputContent, ResponseInputItem, ResponsesInput, ToolCall, ToolFunction,
 };
-use xrouter_core::{CoreError, ProviderOutcome};
+use xrouter_core::{CoreError, ProviderOutcome, ResponseEventSink};
 
 const STREAM_DEBUG_SAMPLE_EVERY: usize = 25;
 const STREAM_DEBUG_PREVIEW_LIMIT: usize = 120;
@@ -210,7 +210,7 @@ impl HttpRuntime {
         payload: &Value,
         bearer_override: Option<&str>,
         extra_headers: &[(String, String)],
-        sender: Option<&mpsc::Sender<Result<ResponseEvent, CoreError>>>,
+        sender: Option<&dyn ResponseEventSink>,
     ) -> Result<ProviderOutcome, CoreError> {
         let request_span = info_span!(
             "provider_stream_request",
@@ -287,24 +287,22 @@ impl HttpRuntime {
                         );
                     }
                     if let Some(tx) = sender {
-                        let _ = tx
-                            .send(Ok(ResponseEvent::OutputTextDelta {
-                                id: request_id.to_string(),
-                                delta: delta.clone(),
-                            }))
-                            .await;
+                        tx.send(Ok(ResponseEvent::OutputTextDelta {
+                            id: request_id.to_string(),
+                            delta: delta.clone(),
+                        }))
+                        .await;
                     }
                     all_chunks.push(delta);
                 }
                 if let Some(reasoning_delta) = extract_chat_reasoning_delta(&frame, request_id)?
                     && let Some(tx) = sender
                 {
-                    let _ = tx
-                        .send(Ok(ResponseEvent::ReasoningDelta {
-                            id: request_id.to_string(),
-                            delta: reasoning_delta,
-                        }))
-                        .await;
+                    tx.send(Ok(ResponseEvent::ReasoningDelta {
+                        id: request_id.to_string(),
+                        delta: reasoning_delta,
+                    }))
+                    .await;
                 }
             }
         }
@@ -323,24 +321,22 @@ impl HttpRuntime {
                     );
                 }
                 if let Some(tx) = sender {
-                    let _ = tx
-                        .send(Ok(ResponseEvent::OutputTextDelta {
-                            id: request_id.to_string(),
-                            delta: delta.clone(),
-                        }))
-                        .await;
+                    tx.send(Ok(ResponseEvent::OutputTextDelta {
+                        id: request_id.to_string(),
+                        delta: delta.clone(),
+                    }))
+                    .await;
                 }
                 all_chunks.push(delta);
             }
             if let Some(reasoning_delta) = extract_chat_reasoning_delta(&frame, request_id)?
                 && let Some(tx) = sender
             {
-                let _ = tx
-                    .send(Ok(ResponseEvent::ReasoningDelta {
-                        id: request_id.to_string(),
-                        delta: reasoning_delta,
-                    }))
-                    .await;
+                tx.send(Ok(ResponseEvent::ReasoningDelta {
+                    id: request_id.to_string(),
+                    delta: reasoning_delta,
+                }))
+                .await;
             }
         }
         let mut outcome = match if self.provider_id == "gigachat" {
@@ -381,7 +377,7 @@ impl HttpRuntime {
         payload: &Value,
         bearer_override: Option<&str>,
         extra_headers: &[(String, String)],
-        sender: Option<&mpsc::Sender<Result<ResponseEvent, CoreError>>>,
+        sender: Option<&dyn ResponseEventSink>,
     ) -> Result<ProviderOutcome, CoreError> {
         let request_span = info_span!(
             "provider_stream_request",
@@ -453,12 +449,11 @@ impl HttpRuntime {
                     if let Some(tx) = sender
                         && !is_yandex_provider
                     {
-                        let _ = tx
-                            .send(Ok(ResponseEvent::OutputTextDelta {
-                                id: request_id.to_string(),
-                                delta: delta.clone(),
-                            }))
-                            .await;
+                        tx.send(Ok(ResponseEvent::OutputTextDelta {
+                            id: request_id.to_string(),
+                            delta: delta.clone(),
+                        }))
+                        .await;
                     }
                     all_chunks.push(delta);
                 }
@@ -481,12 +476,11 @@ impl HttpRuntime {
                 if let Some(tx) = sender
                     && !is_yandex_provider
                 {
-                    let _ = tx
-                        .send(Ok(ResponseEvent::OutputTextDelta {
-                            id: request_id.to_string(),
-                            delta: delta.clone(),
-                        }))
-                        .await;
+                    tx.send(Ok(ResponseEvent::OutputTextDelta {
+                        id: request_id.to_string(),
+                        delta: delta.clone(),
+                    }))
+                    .await;
                 }
                 all_chunks.push(delta);
             }
