@@ -439,7 +439,7 @@ These run through multiple phases.
 
 Update in the same PR when boundaries change:
 
-- `docs/architecture.md`
+- `docs/ARCHITECTURE.md`
 - `docs/testing.md`
 - `docs/configuration.md` if config surfaces move
 - formal docs if lifecycle semantics ever change
