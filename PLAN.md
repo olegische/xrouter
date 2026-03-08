@@ -105,7 +105,7 @@ Exit criteria:
 
 Status:
 
-- in progress
+- completed
 
 Objective:
 
@@ -118,16 +118,17 @@ Completed work:
   `ResponseEventSink` abstraction
 - replaced the public `ReceiverStream` return type in `ExecutionEngine::execute_stream*` with a
   core-owned stream alias
-- kept `ExecutionEngine::execute_stream*` behavior unchanged by adapting the existing Tokio stream
-  path behind a private sink wrapper
+- moved runtime-owned stream spawning and channel assembly out of `xrouter-core` and into
+  `xrouter-app`
+- replaced `ExecutionEngine::execute_stream*` with `execute_stream_to_sink(...)` so core owns
+  orchestration while the app owns runtime adapters
 - updated `xrouter-clients-openai` to depend on the core sink abstraction instead of Tokio sender
   types
-
-Remaining work:
-
-1. isolate remaining runtime stream/output boundaries behind typed abstractions
-2. keep lifecycle semantics aligned with the formal model
-3. reduce direct observability coupling in the hot path
+- removed direct `opentelemetry::Status` and `tracing_opentelemetry::OpenTelemetrySpanExt`
+  coupling from `xrouter-core` while preserving tracing spans and structured events
+- reduced `xrouter-core` production dependencies to architecture-relevant crates only:
+  `async-trait`, `serde_json`, `thiserror`, `tracing`, `uuid`, and `xrouter-contracts`
+- added explicit success/failure tests for the new sink-based streaming boundary
 
 Exit criteria:
 

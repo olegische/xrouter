@@ -1,5 +1,6 @@
 use std::{convert::Infallible, sync::Arc, time::Instant};
 
+use async_trait::async_trait;
 use axum::{
     Json,
     body::Bytes,
@@ -10,18 +11,44 @@ use axum::{
 use futures::StreamExt;
 use opentelemetry::{global, propagation::Extractor, trace::Status};
 use serde_json::{Value, json};
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 use tracing::{Span, debug, field, info, info_span, trace_span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use xrouter_contracts::{
     ChatCompletionsRequest, ChatCompletionsResponse, ResponseEvent, ResponseOutputItem,
     ResponsesRequest, ResponsesResponse,
 };
-use xrouter_core::{CoreError, ExecutionEngine, synthesize_model_id};
+use xrouter_core::{CoreError, ExecutionEngine, ResponseEventSink, synthesize_model_id};
 
 use crate::{
     AppState, http::auth::resolve_byok_bearer, http::docs::ErrorResponse,
     http::errors::error_response,
 };
+
+struct AxumResponseEventSink {
+    sender: mpsc::Sender<Result<ResponseEvent, CoreError>>,
+}
+
+#[async_trait]
+impl ResponseEventSink for AxumResponseEventSink {
+    async fn send(&self, event: Result<ResponseEvent, CoreError>) {
+        let _ = self.sender.send(event).await;
+    }
+}
+
+fn spawn_engine_stream(
+    engine: Arc<ExecutionEngine>,
+    request: ResponsesRequest,
+    auth_bearer: Option<String>,
+) -> ReceiverStream<Result<ResponseEvent, CoreError>> {
+    let (tx, rx) = mpsc::channel(32);
+    let sink: Arc<dyn ResponseEventSink> = Arc::new(AxumResponseEventSink { sender: tx });
+    tokio::spawn(async move {
+        let _ = engine.execute_stream_to_sink(request, None, auth_bearer, sink).await;
+    });
+    ReceiverStream::new(rx)
+}
 
 #[utoipa::path(
     post,
@@ -173,7 +200,7 @@ pub(crate) async fn post_responses(
             }
         });
 
-        let stream = engine.execute_stream_with_auth(request, None, auth_bearer.clone()).flat_map(
+        let stream = spawn_engine_stream(engine.clone(), request, auth_bearer.clone()).flat_map(
             move |event| {
                 let mut events = Vec::<Result<Event, Infallible>>::new();
                 if let Ok(ref mapped) = event {
@@ -455,8 +482,7 @@ pub(crate) async fn post_chat_completions(
         let stream_route = "/api/v1/chat/completions".to_string();
         let stream_request_span = request_span.clone();
         let stream_started_at = started_at;
-        let stream =
-            engine.execute_stream_with_auth(core_request, None, auth_bearer.clone()).map(
+        let stream = spawn_engine_stream(engine.clone(), core_request, auth_bearer.clone()).map(
                 move |evt| {
                     if let Ok(ref mapped) = evt {
                         if let Some(request_id) = response_event_request_id(mapped) {

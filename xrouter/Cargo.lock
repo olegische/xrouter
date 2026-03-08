@@ -2515,6 +2515,7 @@ checksum = "9edde0db4769d2dc68579893f2306b26c6ecfbe0ef499b013d731b7b9247e0b9"
 name = "xrouter-app"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum 0.8.8",
  "dotenvy",
  "futures",
@@ -2572,14 +2573,10 @@ name = "xrouter-core"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "futures",
- "opentelemetry",
  "serde_json",
  "thiserror",
  "tokio",
- "tokio-stream",
  "tracing",
- "tracing-opentelemetry",
  "uuid",
  "xrouter-contracts",
 ]

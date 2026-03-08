@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+async-trait.workspace = true
 axum.workspace = true
 dotenvy.workspace = true
 futures.workspace = true

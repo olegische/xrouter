@@ -1,12 +1,7 @@
 use std::{sync::Arc, time::Instant};
 
 use async_trait::async_trait;
-use futures::{StreamExt, stream::BoxStream};
-use opentelemetry::trace::Status;
-use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
 use tracing::{Instrument, error, field, info, info_span, warn};
-use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 use xrouter_contracts::{
     ReasoningConfig, ResponseEvent, ResponseOutputItem, ResponseOutputText,
@@ -382,8 +377,6 @@ pub trait ResponseEventSink: Send + Sync {
     async fn send(&self, event: Result<ResponseEvent, CoreError>);
 }
 
-pub type ResponseEventStream = BoxStream<'static, Result<ResponseEvent, CoreError>>;
-
 #[derive(Debug, Clone, Copy)]
 pub struct ProviderGenerateRequest<'a> {
     pub model: &'a str,
@@ -501,7 +494,6 @@ impl StageHandler for GenerateHandler {
         {
             Ok(result) => result,
             Err(error) => {
-                provider_span.set_status(Status::error(error.to_string()));
                 warn!(
                     event = "provider.request.failed",
                     provider_model = %context.model,
@@ -566,17 +558,6 @@ impl StageHandler for GenerateHandler {
 
 pub struct ExecutionEngine {
     provider: Arc<dyn ProviderClient>,
-}
-
-struct MpscResponseEventSink {
-    sender: mpsc::Sender<Result<ResponseEvent, CoreError>>,
-}
-
-#[async_trait]
-impl ResponseEventSink for MpscResponseEventSink {
-    async fn send(&self, event: Result<ResponseEvent, CoreError>) {
-        let _ = self.sender.send(event).await;
-    }
 }
 
 fn tool_call_id_from_response_id(response_id: &str) -> String {
@@ -678,38 +659,26 @@ impl ExecutionEngine {
         self.execute_internal(request, disconnect_at, None, None).await
     }
 
-    pub fn execute_stream(
-        self: Arc<Self>,
-        request: ResponsesRequest,
-        disconnect_at: Option<StageName>,
-    ) -> ResponseEventStream {
-        self.execute_stream_with_auth(request, disconnect_at, None)
-    }
-
-    pub fn execute_stream_with_auth(
-        self: Arc<Self>,
+    pub async fn execute_stream_to_sink(
+        &self,
         request: ResponsesRequest,
         disconnect_at: Option<StageName>,
         auth_bearer: Option<String>,
-    ) -> ResponseEventStream {
-        let (tx, rx) = mpsc::channel(32);
-        let sink: Arc<dyn ResponseEventSink> =
-            Arc::new(MpscResponseEventSink { sender: tx.clone() });
-        tokio::spawn(async move {
-            let result = self
-                .execute_internal(request, disconnect_at, Some(sink), auth_bearer)
-                .instrument(info_span!("execute_stream"))
+        sender: Arc<dyn ResponseEventSink>,
+    ) -> Result<(), CoreError> {
+        let result = self
+            .execute_internal(request, disconnect_at, Some(sender.clone()), auth_bearer)
+            .instrument(info_span!("execute_stream"))
+            .await;
+        if let Err(error) = &result {
+            sender
+                .send(Ok(ResponseEvent::ResponseError {
+                    id: "unknown".to_string(),
+                    message: error.to_string(),
+                }))
                 .await;
-            if let Err(e) = result {
-                let _ = tx
-                    .send(Ok(ResponseEvent::ResponseError {
-                        id: "unknown".to_string(),
-                        message: e.to_string(),
-                    }))
-                    .await;
-            }
-        });
-        ReceiverStream::new(rx).boxed()
+        }
+        result.map(|_| ())
     }
 
     async fn execute_internal(
@@ -862,8 +831,6 @@ impl ExecutionEngine {
                 match stage {
                     StageName::Ingest | StageName::Tokenize => {
                         context.state = KernelState::Failed;
-                        tracing::Span::current()
-                            .set_status(Status::error("client disconnected".to_string()));
                         warn!(
                             event = "pipeline.stage.disconnected",
                             duration_ms = stage_started_at.elapsed().as_millis() as u64
@@ -882,7 +849,6 @@ impl ExecutionEngine {
                     duration_ms = stage_started_at.elapsed().as_millis() as u64
                 ),
                 Err(error) => {
-                    tracing::Span::current().set_status(Status::error(error.to_string()));
                     warn!(
                         event = "pipeline.stage.failed",
                         stage_name = %stage_label,
@@ -1158,6 +1124,17 @@ usage_total=3
         seen: Arc<Mutex<Option<String>>>,
     }
 
+    struct CaptureSink {
+        events: Arc<Mutex<Vec<Result<ResponseEvent, CoreError>>>>,
+    }
+
+    #[async_trait]
+    impl ResponseEventSink for CaptureSink {
+        async fn send(&self, event: Result<ResponseEvent, CoreError>) {
+            self.events.lock().expect("lock must succeed").push(event);
+        }
+    }
+
     #[async_trait]
     impl ProviderClient for AuthCaptureProvider {
         async fn generate(
@@ -1215,5 +1192,53 @@ usage_total=3
 
         let _ = engine.execute(request).await.expect("request must succeed");
         assert_eq!(seen.lock().expect("lock must succeed").as_deref(), None);
+    }
+
+    #[tokio::test]
+    async fn execute_stream_to_sink_emits_completed_event_on_success() {
+        let engine = ExecutionEngine::new(build_provider(ProviderBehavior::Success));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::new(CaptureSink { events: events.clone() });
+        let request = ResponsesRequest {
+            model: "fake".to_string(),
+            input: xrouter_contracts::ResponsesInput::Text("hello".to_string()),
+            stream: true,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+        };
+
+        engine
+            .execute_stream_to_sink(request, None, None, sink)
+            .await
+            .expect("stream request must succeed");
+
+        let events = events.lock().expect("lock must succeed");
+        assert!(
+            events.iter().any(|event| matches!(event, Ok(ResponseEvent::ResponseCompleted { .. })))
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_stream_to_sink_emits_error_event_on_failure() {
+        let engine = ExecutionEngine::new(build_provider(ProviderBehavior::Fail));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::new(CaptureSink { events: events.clone() });
+        let request = ResponsesRequest {
+            model: "fake".to_string(),
+            input: xrouter_contracts::ResponsesInput::Text("hello".to_string()),
+            stream: true,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+        };
+
+        let result = engine.execute_stream_to_sink(request, None, None, sink).await;
+
+        assert!(matches!(result, Err(CoreError::Provider(_))));
+        let events = events.lock().expect("lock must succeed");
+        assert!(
+            events.iter().any(|event| matches!(event, Ok(ResponseEvent::ResponseError { .. })))
+        );
     }
 }
