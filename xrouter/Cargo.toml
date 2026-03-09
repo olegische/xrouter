@@ -34,6 +34,6 @@ tracing-opentelemetry = "0.29"
 opentelemetry = "0.28"
 opentelemetry_sdk = "0.28"
 opentelemetry-otlp = { version = "0.28", features = ["trace", "tokio", "grpc-tonic", "http-proto", "reqwest-client"] }
-uuid = { version = "1", features = ["v4", "serde"] }
+uuid = { version = "1", features = ["v4", "serde", "js"] }
 utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "9", features = ["axum", "vendored"] }

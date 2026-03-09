@@ -1,7 +1,7 @@
 use serde_json::{Map, Value, json};
 use xrouter_contracts::{ResponseInputContent, ResponseInputItem, ResponsesInput};
 
-pub(crate) fn base_chat_payload(
+pub fn base_chat_payload(
     model: &str,
     input: &ResponsesInput,
     tools: Option<&[Value]>,
@@ -26,7 +26,7 @@ pub(crate) fn base_chat_payload(
     payload
 }
 
-pub(crate) fn build_chat_messages_from_responses_input(input: &ResponsesInput) -> Vec<Value> {
+pub fn build_chat_messages_from_responses_input(input: &ResponsesInput) -> Vec<Value> {
     match input {
         ResponsesInput::Text(text) => vec![json!({ "role": "user", "content": text })],
         ResponsesInput::Items(items) => {

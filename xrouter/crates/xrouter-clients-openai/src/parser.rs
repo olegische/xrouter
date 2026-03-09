@@ -7,7 +7,7 @@ use uuid::Uuid;
 use xrouter_contracts::{ToolCall, ToolFunction};
 use xrouter_core::{CoreError, ProviderOutcome};
 
-pub(crate) fn map_chat_completion_response(
+pub fn map_chat_completion_response(
     payload: ChatCompletionsResponse,
 ) -> Result<ProviderOutcome, CoreError> {
     let first = payload
@@ -52,7 +52,7 @@ pub(crate) fn map_chat_completion_response(
     })
 }
 
-pub(crate) fn map_responses_api_response(
+pub fn map_responses_api_response(
     payload: ResponsesApiResponse,
 ) -> Result<ProviderOutcome, CoreError> {
     let content = extract_message_text_from_responses_output(&payload.output).unwrap_or_default();
@@ -84,7 +84,7 @@ pub(crate) fn map_responses_api_response(
     })
 }
 
-pub(crate) fn map_chat_completion_stream_text(payload: &str) -> Result<ProviderOutcome, CoreError> {
+pub fn map_chat_completion_stream_text(payload: &str) -> Result<ProviderOutcome, CoreError> {
     let mut chunks = Vec::<String>::new();
     let mut all_content = String::new();
     let mut reasoning = String::new();
@@ -193,7 +193,7 @@ pub(crate) fn map_chat_completion_stream_text(payload: &str) -> Result<ProviderO
     })
 }
 
-pub(crate) fn map_responses_stream_text(payload: &str) -> Result<ProviderOutcome, CoreError> {
+pub fn map_responses_stream_text(payload: &str) -> Result<ProviderOutcome, CoreError> {
     let mut chunks = Vec::<String>::new();
     let mut all_content = String::new();
     let mut tool_calls = Vec::<ToolCall>::new();
@@ -276,7 +276,7 @@ fn extract_sse_data_events(payload: &str) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn drain_sse_frames(buffer: &mut String, flush_tail: bool) -> Vec<String> {
+pub fn drain_sse_frames(buffer: &mut String, flush_tail: bool) -> Vec<String> {
     let mut frames = Vec::new();
     while let Some(idx) = buffer.find("\n\n") {
         let frame = buffer[..idx].to_string();
@@ -306,10 +306,7 @@ fn sse_frame_to_data(frame: &str) -> Option<String> {
     if data_lines.is_empty() { None } else { Some(data_lines.join("\n")) }
 }
 
-pub(crate) fn extract_chat_delta_chunks(
-    frame: &str,
-    _request_id: &str,
-) -> Result<Vec<String>, CoreError> {
+pub fn extract_chat_delta_chunks(frame: &str, _request_id: &str) -> Result<Vec<String>, CoreError> {
     let Some(data) = sse_frame_to_data(frame) else {
         return Ok(Vec::new());
     };
@@ -329,7 +326,7 @@ pub(crate) fn extract_chat_delta_chunks(
     Ok(chunks)
 }
 
-pub(crate) fn extract_chat_reasoning_delta(
+pub fn extract_chat_reasoning_delta(
     frame: &str,
     _request_id: &str,
 ) -> Result<Option<String>, CoreError> {
@@ -349,7 +346,7 @@ pub(crate) fn extract_chat_reasoning_delta(
     if text.trim().is_empty() { Ok(None) } else { Ok(Some(text)) }
 }
 
-pub(crate) fn extract_responses_text_delta(frame: &str) -> Result<Option<String>, CoreError> {
+pub fn extract_responses_text_delta(frame: &str) -> Result<Option<String>, CoreError> {
     let Some(data) = sse_frame_to_data(frame) else {
         return Ok(None);
     };
@@ -365,7 +362,7 @@ pub(crate) fn extract_responses_text_delta(frame: &str) -> Result<Option<String>
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct ChatCompletionsResponse {
+pub struct ChatCompletionsResponse {
     pub(crate) choices: Vec<Choice>,
     #[serde(default)]
     pub(crate) usage: Option<Usage>,
@@ -397,7 +394,7 @@ pub(crate) struct Usage {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct ResponsesApiResponse {
+pub struct ResponsesApiResponse {
     #[serde(default)]
     pub(crate) output: Vec<ResponsesApiOutputItem>,
     #[serde(default)]

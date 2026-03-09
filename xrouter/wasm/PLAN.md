@@ -48,7 +48,30 @@ Main gaps still visible from the codebase:
 2. browser model discovery does not exist yet
 3. `xrouter-app` currently owns startup model catalog assembly
 4. no dedicated browser crate exists yet
-5. extraction targets inside `xrouter-app` are not yet explicitly mapped
+5. extraction targets inside `xrouter-app` are only partially mapped
+
+## Current Status
+
+Implementation has started.
+
+Completed so far:
+
+1. `xrouter-contracts` passes `cargo check -p xrouter-contracts --target wasm32-unknown-unknown`
+2. `xrouter-core` passes `cargo check -p xrouter-core --target wasm32-unknown-unknown`
+3. workspace `uuid` is configured with browser RNG support through the `js` feature
+4. `xrouter-clients-openai` was split so `parser` and `protocol` are portable while native
+   `clients` and `transport` stay target-gated
+5. `xrouter-clients-openai` now passes `cargo check -p xrouter-clients-openai --target wasm32-unknown-unknown`
+6. native validation stayed green:
+   - `cargo check -p xrouter-app`
+   - `cargo test -p xrouter-clients-openai`
+   - `cargo test --all-features`
+   - `cargo clippy --all-targets --all-features -- -D warnings`
+
+Current active focus:
+
+1. browser model discovery extraction from `xrouter-app/startup`
+2. browser transport boundary design for streamed inference
 
 ## Phase 0: Track Setup
 
@@ -66,7 +89,7 @@ Completed:
 
 Status:
 
-- pending
+- completed
 
 Objective:
 
@@ -92,11 +115,21 @@ Exit criteria:
 3. browser work is no longer based on guesses
 4. extraction candidates from `xrouter-app` are explicitly listed
 
+Completed:
+
+1. verified `xrouter-contracts` and `xrouter-core` compile for `wasm32-unknown-unknown`
+2. verified the portable reuse surface inside `xrouter-clients-openai` can compile under wasm
+   after separating native-only dependencies
+3. identified the first concrete blocker and fixed it:
+   `uuid` needed browser RNG support
+4. identified the next extraction target:
+   model discovery remains trapped inside `xrouter-app/startup`
+
 ## Phase 2: Browser Transport Boundary
 
 Status:
 
-- pending
+- in progress
 
 Objective:
 
@@ -121,11 +154,17 @@ Exit criteria:
 2. abstraction is small and explicit
 3. the abstraction supports true streaming, not fake post-buffered replay
 
+Progress:
+
+1. `xrouter-clients-openai` now exposes portable `parser` and `protocol` modules publicly
+2. native `clients` and `transport` are target-gated out of wasm builds
+3. the actual browser runtime/stream transport abstraction is not implemented yet
+
 ## Phase 3: Browser Model Discovery Boundary
 
 Status:
 
-- pending
+- in progress
 
 Objective:
 
@@ -147,6 +186,13 @@ Work:
 4. support at least the first demo provider end to end
 5. if logic is shared with the server product, move it into a portable crate instead of keeping it
    under `xrouter-app`
+
+Current next step:
+
+1. extract model descriptor mapping and provider model-list normalization out of
+   `xrouter-app/startup/model_catalog_remote.rs`
+2. keep native fetch logic working while making the normalization reusable by the future browser
+   crate
 
 Exit criteria:
 
@@ -210,6 +256,11 @@ Why not `xrouter/wasm` as a crate:
 
 1. `xrouter/wasm` is the track/document area
 2. code crates should continue to live under `xrouter/crates/` with the rest of the workspace
+
+Note:
+
+1. crate creation is intentionally deferred until model discovery and browser transport seams are
+   clearer
 
 Work:
 
