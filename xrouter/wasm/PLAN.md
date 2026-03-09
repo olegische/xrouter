@@ -204,6 +204,19 @@ Current next step:
 2. keep native fetch logic working while making the normalization reusable by the future browser
    crate
 
+Progress:
+
+1. provider model response DTOs, normalization, and registry fallback logic were moved into
+   `xrouter-clients-openai`
+2. portable request builders now exist for:
+   - OpenRouter `/models`
+   - generic provider `/models`
+   - xrouter `/models`
+   - Gigachat OAuth and `/models`
+3. `xrouter-app` now acts as a native executor for those shared request shapes instead of owning
+   the request construction itself
+4. browser-specific execution of those request shapes is not implemented yet
+
 Exit criteria:
 
 1. browser can fetch and display models for the first provider

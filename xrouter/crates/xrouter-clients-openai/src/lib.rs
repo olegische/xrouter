@@ -1,4 +1,5 @@
 mod clients;
+pub mod model_discovery;
 pub mod models;
 pub mod parser;
 pub mod protocol;

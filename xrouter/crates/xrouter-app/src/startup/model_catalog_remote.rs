@@ -7,6 +7,10 @@ use ureq::rustls::{
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
     pki_types::{CertificateDer, ServerName, UnixTime},
 };
+use xrouter_clients_openai::model_discovery::{
+    HttpFormRequest, HttpJsonRequest, build_gigachat_models_request, build_gigachat_oauth_request,
+    build_openrouter_models_request, build_provider_models_request, build_xrouter_models_request,
+};
 use xrouter_clients_openai::models::{
     OpenRouterModelsResponse, ProviderModelsResponse, XrouterProviderModelsResponse,
     extract_provider_model_ids, map_openrouter_models, map_xrouter_models,
@@ -21,7 +25,6 @@ struct GigachatOauthResponse {
     access_token: String,
 }
 
-const GIGACHAT_OAUTH_URL: &str = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth";
 const GIGACHAT_SCOPE: &str = "GIGACHAT_API_PERS";
 
 #[derive(Debug)]
@@ -93,48 +96,16 @@ pub(crate) fn fetch_openrouter_models(
     supported_ids: &[String],
     connect_timeout_seconds: u64,
 ) -> Option<Vec<ModelDescriptor>> {
-    let base_url = provider_config
-        .base_url
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or("https://openrouter.ai/api/v1")
-        .trim_end_matches('/')
-        .to_string();
-    if base_url.is_empty() {
-        return None;
-    }
-
-    let url = format!("{base_url}/models");
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(connect_timeout_seconds))
-        .build();
-    let mut request = agent.get(url.as_str()).set("Accept", "application/json");
-    if let Some(api_key) = provider_config.api_key.as_deref() {
-        request = request.set("Authorization", &format!("Bearer {api_key}"));
-    }
-
-    let response = request.call();
-    let payload = match response {
-        Ok(ok) => match ok.into_json::<OpenRouterModelsResponse>() {
-            Ok(payload) => payload,
-            Err(err) => {
-                warn!(
-                    event = "openrouter.models.fetch.failed",
-                    reason = "invalid_json",
-                    error = %err
-                );
-                return None;
-            }
-        },
-        Err(err) => {
-            warn!(
-                event = "openrouter.models.fetch.failed",
-                reason = "request_failed",
-                error = %err
-            );
-            return None;
-        }
-    };
+    let request = build_openrouter_models_request(
+        provider_config.base_url.as_deref(),
+        provider_config.api_key.as_deref(),
+    )?;
+    let payload = fetch_json::<OpenRouterModelsResponse>(
+        request,
+        connect_timeout_seconds,
+        "openrouter.models.fetch.failed",
+        None,
+    )?;
 
     Some(map_openrouter_models(payload, supported_ids))
 }
@@ -153,95 +124,36 @@ pub(crate) fn fetch_provider_model_ids(
         );
     }
 
-    let base_url = provider_config
-        .base_url
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())?
-        .trim_end_matches('/')
-        .to_string();
-    if base_url.is_empty() {
-        return None;
-    }
-
-    let url = format!("{base_url}/models");
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(connect_timeout_seconds))
-        .build();
-    let mut request = agent.get(url.as_str()).set("Accept", "application/json");
-    if let Some(api_key) = provider_config.api_key.as_deref().filter(|v| !v.trim().is_empty()) {
-        request = request.set("Authorization", &format!("Bearer {api_key}"));
-    }
-    if provider_name == "yandex"
-        && let Some(project) = provider_config.project.as_deref().filter(|v| !v.trim().is_empty())
-    {
-        request = request.set("OpenAI-Project", project);
-    }
-
-    match request.call() {
-        Ok(ok) => match ok.into_json::<ProviderModelsResponse>() {
-            Ok(payload) => Some(extract_provider_model_ids(payload)),
-            Err(err) => {
-                warn!(
-                    event = "provider.models.fetch.failed",
-                    provider = %provider_name,
-                    reason = "invalid_json",
-                    error = %err
-                );
-                None
-            }
-        },
-        Err(err) => {
-            warn!(
-                event = "provider.models.fetch.failed",
-                provider = %provider_name,
-                reason = "request_failed",
-                error = %err
-            );
-            None
-        }
-    }
+    let request = build_provider_models_request(
+        provider_name,
+        provider_config.base_url.as_deref(),
+        provider_config.api_key.as_deref(),
+        provider_config.project.as_deref(),
+    )?;
+    let payload = fetch_json::<ProviderModelsResponse>(
+        request,
+        connect_timeout_seconds,
+        "provider.models.fetch.failed",
+        Some(provider_name),
+    )?;
+    Some(extract_provider_model_ids(payload))
 }
 
 pub(crate) fn fetch_xrouter_models(
     provider_config: &config::ProviderConfig,
     connect_timeout_seconds: u64,
 ) -> Option<Vec<ModelDescriptor>> {
-    let base_url = provider_config
-        .base_url
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())?
-        .trim_end_matches('/')
-        .to_string();
-    if base_url.is_empty() {
-        return None;
-    }
-
-    let url = format!("{base_url}/models");
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(connect_timeout_seconds))
-        .build();
-    let mut request = agent.get(url.as_str()).set("Accept", "application/json");
-    if let Some(api_key) = provider_config.api_key.as_deref().filter(|v| !v.trim().is_empty()) {
-        request = request.set("Authorization", &format!("Bearer {api_key}"));
-    }
-
-    match request.call() {
-        Ok(ok) => match ok.into_json::<XrouterProviderModelsResponse>() {
-            Ok(payload) => Some(map_xrouter_models(payload)),
-            Err(err) => {
-                warn!(
-                    event = "xrouter.models.fetch.failed",
-                    reason = "invalid_json",
-                    error = %err
-                );
-                None
-            }
-        },
-        Err(err) => {
-            warn!(event = "xrouter.models.fetch.failed", reason = "request_failed", error = %err);
-            None
-        }
-    }
+    let request = build_xrouter_models_request(
+        provider_config.base_url.as_deref(),
+        provider_config.api_key.as_deref(),
+    )?;
+    let payload = fetch_json::<XrouterProviderModelsResponse>(
+        request,
+        connect_timeout_seconds,
+        "xrouter.models.fetch.failed",
+        None,
+    )?;
+    Some(map_xrouter_models(payload))
 }
 
 fn fetch_gigachat_access_token(
@@ -252,37 +164,14 @@ fn fetch_gigachat_access_token(
     let api_key = provider_config.api_key.as_deref().filter(|v| !v.trim().is_empty())?;
     let agent = gigachat_ureq_agent(connect_timeout_seconds, insecure_tls);
     let request_id = uuid::Uuid::new_v4().to_string();
-    let response = agent
-        .post(GIGACHAT_OAUTH_URL)
-        .set("Accept", "application/json")
-        .set("Authorization", &format!("Bearer {api_key}"))
-        .set("RqUID", &request_id)
-        .set("Content-Type", "application/x-www-form-urlencoded")
-        .send_form(&[("scope", GIGACHAT_SCOPE)]);
-
-    match response {
-        Ok(ok) => match ok.into_json::<GigachatOauthResponse>() {
-            Ok(payload) => Some(payload.access_token),
-            Err(err) => {
-                warn!(
-                    event = "provider.oauth.fetch.failed",
-                    provider = "gigachat",
-                    reason = "invalid_json",
-                    error = %err
-                );
-                None
-            }
-        },
-        Err(err) => {
-            warn!(
-                event = "provider.oauth.fetch.failed",
-                provider = "gigachat",
-                reason = "request_failed",
-                error = %err
-            );
-            None
-        }
-    }
+    let request = build_gigachat_oauth_request(api_key, &request_id, GIGACHAT_SCOPE);
+    fetch_form_json::<GigachatOauthResponse>(
+        &agent,
+        request,
+        "provider.oauth.fetch.failed",
+        Some("gigachat"),
+    )
+    .map(|payload| payload.access_token)
 }
 
 fn fetch_gigachat_model_ids(
@@ -290,43 +179,96 @@ fn fetch_gigachat_model_ids(
     connect_timeout_seconds: u64,
     insecure_tls: bool,
 ) -> Option<Vec<String>> {
-    let base_url = provider_config
-        .base_url
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())?
-        .trim_end_matches('/')
-        .to_string();
     let access_token =
         fetch_gigachat_access_token(provider_config, connect_timeout_seconds, insecure_tls)?;
     let agent = gigachat_ureq_agent(connect_timeout_seconds, insecure_tls);
-    let url = format!("{base_url}/models");
-    let response = agent
-        .get(url.as_str())
-        .set("Accept", "application/json")
-        .set("Authorization", &format!("Bearer {access_token}"))
-        .call();
+    let request =
+        build_gigachat_models_request(provider_config.base_url.as_deref(), &access_token)?;
+    let payload = fetch_json_with_agent::<ProviderModelsResponse>(
+        &agent,
+        request,
+        "provider.models.fetch.failed",
+        Some("gigachat"),
+    )?;
+    Some(extract_provider_model_ids(payload))
+}
 
-    match response {
-        Ok(ok) => match ok.into_json::<ProviderModelsResponse>() {
-            Ok(payload) => Some(extract_provider_model_ids(payload)),
+fn fetch_json<T: serde::de::DeserializeOwned>(
+    request: HttpJsonRequest,
+    connect_timeout_seconds: u64,
+    event: &'static str,
+    provider: Option<&str>,
+) -> Option<T> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(connect_timeout_seconds))
+        .build();
+    fetch_json_with_agent(&agent, request, event, provider)
+}
+
+fn fetch_json_with_agent<T: serde::de::DeserializeOwned>(
+    agent: &ureq::Agent,
+    request: HttpJsonRequest,
+    event: &'static str,
+    provider: Option<&str>,
+) -> Option<T> {
+    let mut call = agent.get(request.url.as_str());
+    for (name, value) in &request.headers {
+        call = call.set(name, value);
+    }
+    match call.call() {
+        Ok(ok) => match ok.into_json::<T>() {
+            Ok(payload) => Some(payload),
             Err(err) => {
-                warn!(
-                    event = "provider.models.fetch.failed",
-                    provider = "gigachat",
-                    reason = "invalid_json",
-                    error = %err
-                );
+                log_fetch_failure(event, provider, "invalid_json", &err.to_string());
                 None
             }
         },
         Err(err) => {
-            warn!(
-                event = "provider.models.fetch.failed",
-                provider = "gigachat",
-                reason = "request_failed",
-                error = %err
-            );
+            log_fetch_failure(event, provider, "request_failed", &err.to_string());
             None
         }
+    }
+}
+
+fn fetch_form_json<T: serde::de::DeserializeOwned>(
+    agent: &ureq::Agent,
+    request: HttpFormRequest,
+    event: &'static str,
+    provider: Option<&str>,
+) -> Option<T> {
+    let mut call = agent.post(request.url.as_str());
+    for (name, value) in &request.headers {
+        call = call.set(name, value);
+    }
+    let form_fields = request
+        .form_fields
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect::<Vec<_>>();
+    match call.send_form(&form_fields) {
+        Ok(ok) => match ok.into_json::<T>() {
+            Ok(payload) => Some(payload),
+            Err(err) => {
+                log_fetch_failure(event, provider, "invalid_json", &err.to_string());
+                None
+            }
+        },
+        Err(err) => {
+            log_fetch_failure(event, provider, "request_failed", &err.to_string());
+            None
+        }
+    }
+}
+
+fn log_fetch_failure(
+    event: &'static str,
+    provider: Option<&str>,
+    reason: &'static str,
+    error: &str,
+) {
+    if let Some(provider) = provider {
+        warn!(event = event, provider = provider, reason = reason, error = %error);
+    } else {
+        warn!(event = event, reason = reason, error = %error);
     }
 }
