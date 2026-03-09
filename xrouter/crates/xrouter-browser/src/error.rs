@@ -6,6 +6,10 @@ pub enum BrowserError {
     UnsupportedPlatform,
     #[error("request build failed: {0}")]
     InvalidRequest(&'static str),
+    #[error("request `{0}` is already active")]
+    RequestConflict(String),
+    #[error("request `{0}` was canceled")]
+    Canceled(String),
     #[error("provider `{0}` is not supported in the browser runtime yet")]
     UnsupportedProvider(String),
     #[error("browser window is not available")]

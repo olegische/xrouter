@@ -1,0 +1,5 @@
+node_modules/
+dist/
+src/lib/wasm/*
+!src/lib/wasm/.gitignore
+!src/lib/wasm/xrouter_browser.d.ts

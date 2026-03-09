@@ -1,0 +1,38 @@
+:root {
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  color: #f5efe2;
+  background:
+    radial-gradient(circle at top left, rgba(232, 121, 45, 0.18), transparent 34%),
+    radial-gradient(circle at top right, rgba(114, 155, 255, 0.16), transparent 28%),
+    linear-gradient(160deg, #0e1525 0%, #18263f 48%, #0b1019 100%);
+  color-scheme: dark;
+  --panel: rgba(9, 14, 24, 0.72);
+  --panel-strong: rgba(7, 11, 18, 0.88);
+  --line: rgba(255, 255, 255, 0.11);
+  --accent: #f09949;
+  --accent-cool: #80c8ff;
+  --text-soft: rgba(245, 239, 226, 0.76);
+  --text-faint: rgba(245, 239, 226, 0.56);
+  --danger: #ff7f73;
+}
+
+html,
+body,
+#app {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+* {
+  box-sizing: border-box;
+}

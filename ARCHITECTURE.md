@@ -214,6 +214,14 @@ Provider requests, stream lifecycle, and error paths are expected to remain obse
 If you change a boundary and observability disappears from that boundary, treat that as an
 architectural regression, not just a logging change.
 
+### WASM
+
+Browser/WASM architecture is tracked with the browser crate itself:
+
+- `xrouter/crates/xrouter-browser/ARCHITECTURE.md`
+- `xrouter/crates/xrouter-browser/PLAN.md`
+- `xrouter/crates/xrouter-browser/README.md`
+
 ### Formal Model
 
 If you change lifecycle semantics, update the formal artifacts in `formal/`.
@@ -232,4 +240,4 @@ Near-term work should mostly be:
 3. keeping composition explicit
 4. keeping provider logic separate from transport and route adaptation
 
-WASM-specific architecture is tracked separately under `xrouter/wasm/`.
+WASM-specific architecture is tracked separately with `xrouter-browser`.

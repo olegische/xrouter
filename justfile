@@ -23,6 +23,15 @@ run:
 dev:
     ./dev.sh
 
+demo-install:
+    cd ../browser-demo && npm install
+
+demo-wasm:
+    cd ../browser-demo && npm run wasm:build
+
+demo-dev:
+    cd ../browser-demo && npm run dev
+
 models provider:
     ./scripts/check_models.sh {{ provider }}
 

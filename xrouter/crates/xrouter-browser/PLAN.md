@@ -24,14 +24,23 @@ Build a browser-safe vertical slice where:
 6. the provider response is displayed as a live stream
 
 The first milestone is not "general WASM readiness".
-The first milestone is this end-to-end browser demo.
+The first milestone is this end-to-end browser acceptance slice.
 
 The broader architectural target behind that demo is:
 
 1. browser build has zero dependency on server-only crates
 2. shared logic is reused through portable crates
 3. browser-needed logic currently trapped in `xrouter-app` is extracted, not imported directly
-4. the Rust browser crate and the demo frontend app are built as separate deliverables
+4. the Rust browser crate and any demo frontend app are separate deliverables
+
+Definition of done for the XRouter wasm track:
+
+1. `xrouter-browser` is portable and browser-ready
+2. one provider path works in-browser with real streaming
+3. browser model discovery works
+4. request-scoped cancellation exists
+5. the library is consumable by external hosts
+6. a bundled UI is optional and not required
 
 ## Current Starting Point
 
@@ -45,11 +54,8 @@ Already completed in the main codebase:
 
 Main gaps still visible from the codebase:
 
-1. browser-safe streaming transport does not exist yet
-2. browser model discovery execution exists only for model listing, not for the full demo flow
-3. `xrouter-app` still owns parts of startup model catalog assembly
-4. no separate frontend demo app exists yet
-5. extraction targets inside `xrouter-app` are only partially mapped
+1. `xrouter-app` still owns parts of startup model catalog assembly
+2. packaging guidance for downstream consumers needs to be documented explicitly
 
 ## Current Status
 
@@ -72,9 +78,9 @@ Completed so far:
 
 Current active focus:
 
-1. browser model discovery extraction from `xrouter-app/startup`
-2. browser-facing runtime implementation on top of the completed transport boundary
-3. preserving a clean split between the future Rust browser crate and the future demo frontend app
+1. stabilizing the consumer-facing wasm contract
+2. documenting packaging and ownership boundaries
+3. leaving downstream host integration out of `xrouter` scope
 
 ## Phase 0: Track Setup
 
@@ -85,7 +91,7 @@ Status:
 Completed:
 
 1. WASM planning moved out of the main architecture/plan
-2. a dedicated `xrouter/wasm/` track area exists for this work
+2. a dedicated browser track now exists under `xrouter/crates/xrouter-browser/`
 3. main architecture is now stable enough to use as the baseline for browser work
 
 ## Phase 1: Portability Audit
@@ -176,7 +182,7 @@ Progress:
 
 Status:
 
-- in progress
+- completed
 
 Objective:
 
@@ -229,15 +235,6 @@ Progress:
    - `runTextStream()`
    - `runDemoPromptStream()`
 
-Current next step:
-
-1. validate the first provider path in a real browser host, not only through compile-time and
-   native fallback tests
-2. decide whether remaining model-catalog assembly in `xrouter-app` should move again or stay
-   server-owned
-3. start the separate Vite/Svelte demo app that consumes the wasm bundle instead of adding more UI
-   logic into the Rust crate
-
 Exit criteria:
 
 1. browser can fetch and display models for the first provider
@@ -249,7 +246,7 @@ Exit criteria:
 
 Status:
 
-- in progress
+- completed
 
 Objective:
 
@@ -261,169 +258,86 @@ Recommended first provider:
 
 Why:
 
-1. already exercised heavily in smoke flows
-2. simpler first target than router-of-routers behavior
-3. existing client already supports per-request bearer override
+1. it is close to the OpenAI-compatible path already supported
+2. it supports the required browser demo shape
+3. it avoids early complexity from provider-specific auth dances
 
 Work:
 
-1. reuse `protocol.rs` request shaping where possible
-2. reuse `parser.rs` stream/response normalization where possible
-3. implement browser transport adapter
-4. wire a browser-safe sink for live stream events
-5. validate one prompt round trip using `Hello, what can you do?`
-
-Progress:
-
-1. `xrouter-browser` now includes a browser implementation of `ProviderRuntime`
-2. that runtime reuses shared parser helpers for:
-   - chat-completions JSON responses
-   - chat-completions SSE parsing
-   - responses JSON responses
-   - responses SSE parsing
-3. `BrowserInferenceClient` now drives `DeepSeekClient` through `with_runtime(...)`
-4. the first browser-safe provider enum is explicit and narrow:
-   - `BrowserProvider::DeepSeek`
-5. wasm trait boundaries were updated to allow non-`Send` browser futures without weakening
-   native behavior
-6. a wasm callback sink now bridges streamed `ResponseEvent` values from Rust into JS consumers
-7. `WasmBrowserClient` now provides the browser-facing export surface for demo code
-
-Exit criteria:
-
-1. one provider works from browser/WASM through shared logic
-2. browser receives real stream events as they arrive
-3. native behavior remains intact
-
-## Phase 5: Dedicated WASM Crate
-
-Status:
-
-- completed
-
-Objective:
-
-Introduce a dedicated crate for the browser-facing layer after the vertical slice proves the
-boundary.
-
-Preferred location:
-
-- `xrouter/crates/xrouter-browser`
-  or
-- `xrouter/crates/xrouter-wasm`
-
-Why not `xrouter/wasm` as a crate:
-
-1. `xrouter/wasm` is the track/document area
-2. code crates should continue to live under `xrouter/crates/` with the rest of the workspace
-3. frontend app code should also stay separate from the Rust crate
-
-Work:
-
-1. add crate skeleton
-2. expose minimal browser-facing API
-3. keep crate scope narrow:
-   - configure provider/auth
-   - fetch models
-   - run one streamed request
-4. do not mix Vite/Svelte/TypeScript app code into this crate
-
-Exit criteria:
-
-1. browser consumer does not depend on native app code
-2. browser support has a clear workspace home
-3. crate API is small enough that UI code does not rebuild transport/provider logic
-4. browser crate depends only on portable/shared crates plus browser-specific adapters
-5. the browser crate is cleanly separated from the frontend demo app
+1. wire the first provider through browser-safe request building
+2. wire browser transport into the provider client
+3. verify stream parsing in the browser
+4. verify request-scoped cancellation
+5. expose a minimal wasm-consumable API for host runtimes
 
 Completed:
 
-1. `xrouter/crates/xrouter-browser` now exists in the workspace
-2. the crate owns browser model discovery and browser runtime code
-3. the crate exposes a small browser-facing API instead of leaking provider wiring into UI code
+1. `BrowserProviderRuntime` executes streamed provider requests in the browser
+2. `BrowserInferenceClient` drives the first browser-safe `deepseek` path end to end
+3. `WasmBrowserClient` exposes the browser-safe DeepSeek flow to JS consumers
+4. request-scoped cancellation now exists through `cancel(request_id)`
+5. manual smoke validated real browser model loading, live streaming, and cancellation
 
-## Phase 6: Demo UI Integration
+Exit criteria:
+
+1. one provider works from browser to upstream with live streaming
+2. BYOK is supported without any server relay
+3. browser cancellation is part of the contract
+
+## Phase 5: Browser Packaging
 
 Status:
 
-- pending
+- in progress
 
 Objective:
 
-Wire the Rust browser crate into a separate minimal demo UI app.
-
-Suggested location:
-
-1. `xrouter/browser-demo`
-   or
-2. `xrouter/demo/browser`
+Make the browser router consumable by external hosts without coupling it to any one UI.
 
 Work:
 
-1. API key input
-2. provider selector
-3. model list loading state
-4. model selector
-5. prompt trigger for `Hello, what can you do?`
-6. streamed text rendering
-7. visible error state for:
-   - invalid key
-   - model fetch failure
-   - stream/inference failure
-8. keep frontend tooling isolated from Rust workspace crate logic:
-   - Vite
-   - Svelte
-   - TypeScript
+1. keep `xrouter-browser` as the browser/WASM Rust crate
+2. document its public consumer-facing API
+3. document recommended `wasm-pack` packaging for downstream hosts
+4. keep host-specific adapters out of `xrouter-browser`
+
+Progress:
+
+1. `xrouter-browser` exists as the browser/WASM composition root
+2. consumer-facing usage is documented in `README.md`
+3. downstream host integrations are explicitly out of scope for `xrouter`
 
 Exit criteria:
 
-1. a user can complete the demo flow manually in the browser
-2. stream output is visible incrementally
-3. failure states are observable and debuggable
-4. frontend demo app remains separate from the Rust browser crate
+1. browser library can be consumed without relying on the demo app
+2. host-specific integration remains a downstream concern
 
-## Phase 7: Expand Provider Support
+## Phase 6: Demo Frontend
 
 Status:
 
-- pending
+- optional
 
 Objective:
 
-Add more providers after the first browser-safe path is proven.
+Provide a browser harness to manually prove the acceptance slice.
 
-Order should be pragmatic:
+Notes:
 
-1. simple OpenAI-compatible direct providers first
-2. more specialized providers after the transport boundary is stable
-3. `xrouter` endpoint support only after direct-provider paths are solid
+1. the demo frontend is not part of the required XRouter wasm deliverable
+2. it may exist as a separate example app or smoke harness
+3. its existence does not redefine `xrouter-browser` into a UI-owned product
 
-Exit criteria:
+Completed:
 
-1. adding providers reuses the same browser-safe architecture
-2. provider work does not reintroduce transport/provider mixing
+1. a separate Vite/Svelte demo app exists outside the Rust crate
+2. the demo app proves `BYOK -> models -> select -> stream -> cancel`
 
-## Testing Expectations
+## Out of Scope
 
-For implementation phases, the minimum quality bar remains:
+These items are intentionally out of scope for the XRouter wasm track itself:
 
-1. portability checks for affected crates
-2. deterministic tests for request shaping and stream parsing reuse
-3. happy-path and failure-path coverage for model discovery where applicable
-4. happy-path and failure-path coverage for streamed inference where applicable
-
-Browser-specific tests should focus on:
-
-1. model fetch success/failure
-2. auth propagation without key leakage
-3. stream event forwarding
-4. disconnect behavior at the browser adapter boundary
-
-## Delivery Rules
-
-1. do not reopen the already completed preparatory refactor in the name of WASM
-2. keep native behavior stable while introducing browser support
-3. prefer one provider end to end over broad partial support
-4. keep model discovery ownership explicit; do not leave it hidden inside server startup
-5. extract shared logic out of `xrouter-app` when needed; do not make browser code depend on it
-6. update this plan when blocker ownership or phase order changes
+1. downstream application-specific protocols
+2. `codex-rs`-specific adapters
+3. shipping a required browser UI
+4. parity with every provider before the first accepted browser slice is stable

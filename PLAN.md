@@ -2,7 +2,8 @@
 
 This document is the implementation plan for the Rust architecture defined in `ARCHITECTURE.md`.
 
-It is intentionally independent from WASM. WASM-specific follow-up lives under `xrouter/wasm/`.
+It is intentionally independent from WASM. WASM-specific follow-up lives with the browser crate
+under `xrouter/crates/xrouter-browser/`.
 
 ## Goals
 
@@ -30,7 +31,7 @@ Outcome:
 
 - target architecture documented in `ARCHITECTURE.md`
 - migration guardrails captured in `AGENTS.md`
-- WASM-specific architecture moved out of the main plan into `xrouter/wasm/`
+- WASM-specific architecture moved out of the main plan into `xrouter/crates/xrouter-browser/`
 
 ## Phase 1: Make `xrouter-app` a Real Composition Root
 
@@ -198,5 +199,5 @@ Exit criteria:
 
 WASM-specific architecture and delivery planning are tracked separately:
 
-- `xrouter/wasm/ARCHITECTURE.md`
-- `xrouter/wasm/PLAN.md`
+- `xrouter/crates/xrouter-browser/ARCHITECTURE.md`
+- `xrouter/crates/xrouter-browser/PLAN.md`

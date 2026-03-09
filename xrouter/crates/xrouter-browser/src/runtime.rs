@@ -3,13 +3,21 @@ use async_trait::async_trait;
 use js_sys::{Reflect, Uint8Array};
 use serde_json::Value;
 #[cfg(target_arch = "wasm32")]
+use std::cell::RefCell;
+#[cfg(target_arch = "wasm32")]
+use std::collections::HashMap;
+#[cfg(target_arch = "wasm32")]
+use std::thread_local;
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsValue;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::JsFuture;
 #[cfg(target_arch = "wasm32")]
-use web_sys::{Headers, ReadableStreamDefaultReader, Request, RequestInit, Response, Window};
+use web_sys::{
+    AbortController, Headers, ReadableStreamDefaultReader, Request, RequestInit, Response, Window,
+};
 #[cfg(target_arch = "wasm32")]
 use xrouter_contracts::ResponseEvent;
 use xrouter_core::{CoreError, ProviderOutcome, ResponseEventSink};
@@ -35,6 +43,25 @@ pub(crate) struct BrowserHttpResponse {
     pub(crate) body: String,
 }
 
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static ACTIVE_REQUESTS: RefCell<HashMap<String, AbortController>> = RefCell::new(HashMap::new());
+}
+
+#[cfg(target_arch = "wasm32")]
+struct ActiveRequestGuard {
+    request_id: String,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Drop for ActiveRequestGuard {
+    fn drop(&mut self) {
+        ACTIVE_REQUESTS.with(|requests: &RefCell<HashMap<String, AbortController>>| {
+            requests.borrow_mut().remove(&self.request_id);
+        });
+    }
+}
+
 impl BrowserProviderRuntime {
     pub fn new(
         _provider_id: impl Into<String>,
@@ -57,6 +84,24 @@ impl BrowserProviderRuntime {
 
     fn provider_error(message: impl Into<String>) -> CoreError {
         CoreError::Provider(message.into())
+    }
+
+    pub fn cancel(&self, request_id: &str) -> Result<(), BrowserError> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            ACTIVE_REQUESTS.with(|requests: &RefCell<HashMap<String, AbortController>>| {
+                if let Some(controller) = requests.borrow().get(request_id) {
+                    controller.abort();
+                }
+            });
+            Ok(())
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = request_id;
+            Ok(())
+        }
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -155,7 +200,9 @@ async fn post_chat_completions_stream_impl(
 ) -> Result<ProviderOutcome, CoreError> {
     #[cfg(target_arch = "wasm32")]
     {
-        let response = fetch_post(url, payload, bearer_override.or(api_key), extra_headers).await?;
+        let response =
+            fetch_post(request_id, url, payload, bearer_override.or(api_key), extra_headers)
+                .await?;
         if response.content_type.as_deref().is_some_and(|value| value.contains("application/json"))
         {
             let payload =
@@ -172,7 +219,7 @@ async fn post_chat_completions_stream_impl(
         let mut full_body = String::new();
         let mut reader = stream_response_reader(response.response)?;
 
-        while let Some(chunk) = read_reader_chunk(&mut reader).await? {
+        while let Some(chunk) = read_reader_chunk(request_id, &mut reader).await? {
             let chunk = chunk.replace('\r', "");
             parse_buffer.push_str(&chunk);
             full_body.push_str(&chunk);
@@ -250,7 +297,9 @@ async fn post_responses_stream_impl(
 ) -> Result<ProviderOutcome, CoreError> {
     #[cfg(target_arch = "wasm32")]
     {
-        let response = fetch_post(url, payload, bearer_override.or(api_key), extra_headers).await?;
+        let response =
+            fetch_post(request_id, url, payload, bearer_override.or(api_key), extra_headers)
+                .await?;
         if response.content_type.as_deref().is_some_and(|value| value.contains("application/json"))
         {
             let payload =
@@ -267,7 +316,7 @@ async fn post_responses_stream_impl(
         let mut full_body = String::new();
         let mut reader = stream_response_reader(response.response)?;
 
-        while let Some(chunk) = read_reader_chunk(&mut reader).await? {
+        while let Some(chunk) = read_reader_chunk(request_id, &mut reader).await? {
             let chunk = chunk.replace('\r', "");
             parse_buffer.push_str(&chunk);
             full_body.push_str(&chunk);
@@ -321,18 +370,21 @@ pub(crate) struct WasmFetchResponse {
     pub(crate) response: Response,
     pub(crate) content_type: Option<String>,
     pub(crate) body: String,
+    _guard: Option<ActiveRequestGuard>,
 }
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) async fn fetch_get_text(
     request: &xrouter_clients_openai::model_discovery::HttpJsonRequest,
 ) -> Result<BrowserHttpResponse, BrowserError> {
-    let response = send_request("GET", &request.url, None, None, &request.headers).await?;
+    let response =
+        send_request("model-discovery", "GET", &request.url, None, None, &request.headers).await?;
     Ok(BrowserHttpResponse { body: response.body })
 }
 
 #[cfg(target_arch = "wasm32")]
 async fn fetch_post(
+    request_id: &str,
     url: &str,
     payload: &Value,
     bearer: Option<&str>,
@@ -341,13 +393,14 @@ async fn fetch_post(
     let body = serde_json::to_string(payload).map_err(|err| {
         BrowserProviderRuntime::provider_error(format!("request serialization failed: {err}"))
     })?;
-    send_request("POST", url, Some(&body), bearer, extra_headers)
+    send_request(request_id, "POST", url, Some(&body), bearer, extra_headers)
         .await
         .map_err(|error| BrowserProviderRuntime::provider_error(error.to_string()))
 }
 
 #[cfg(target_arch = "wasm32")]
 async fn send_request(
+    request_id: &str,
     method: &str,
     url: &str,
     body: Option<&str>,
@@ -357,6 +410,18 @@ async fn send_request(
     let window: Window = web_sys::window().ok_or(BrowserError::MissingWindow)?;
     let init = RequestInit::new();
     init.set_method(method);
+    let controller = if method == "POST" {
+        let controller =
+            AbortController::new().map_err(|err| BrowserError::Fetch(format!("{err:?}")))?;
+        init.set_signal(Some(&controller.signal()));
+        Some(controller)
+    } else {
+        None
+    };
+    let guard = controller
+        .as_ref()
+        .map(|controller| register_active_request(request_id, controller))
+        .transpose()?;
     if let Some(body) = body {
         init.set_body(&JsValue::from_str(body));
     }
@@ -380,13 +445,10 @@ async fn send_request(
 
     let response = JsFuture::from(window.fetch_with_request(&request))
         .await
-        .map_err(|err| BrowserError::Fetch(format!("{err:?}")))?;
-    let response: Response =
-        response.dyn_into().map_err(|err| BrowserError::Fetch(format!("{err:?}")))?;
-    let content_type = response
-        .headers()
-        .get("content-type")
-        .map_err(|err| BrowserError::Fetch(format!("{err:?}")))?;
+        .map_err(|err| map_fetch_error(request_id, err))?;
+    let response: Response = response.dyn_into().map_err(|err| map_fetch_error(request_id, err))?;
+    let content_type =
+        response.headers().get("content-type").map_err(|err| map_fetch_error(request_id, err))?;
 
     if !response.ok() {
         let body = read_response_text(&response).await?;
@@ -398,7 +460,7 @@ async fn send_request(
     } else {
         String::new()
     };
-    Ok(WasmFetchResponse { response, content_type, body })
+    Ok(WasmFetchResponse { response, content_type, body, _guard: guard })
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -424,10 +486,13 @@ fn stream_response_reader(response: Response) -> Result<ReadableStreamDefaultRea
 
 #[cfg(target_arch = "wasm32")]
 async fn read_reader_chunk(
+    request_id: &str,
     reader: &mut ReadableStreamDefaultReader,
 ) -> Result<Option<String>, CoreError> {
     let result = JsFuture::from(reader.read()).await.map_err(|err| {
-        BrowserProviderRuntime::provider_error(format!("provider stream read failed: {err:?}"))
+        BrowserProviderRuntime::provider_error(
+            map_browser_error(&err, request_id, "provider stream read failed").to_string(),
+        )
     })?;
     let done = Reflect::get(&result, &JsValue::from_str("done"))
         .map_err(|err| {
@@ -445,6 +510,43 @@ async fn read_reader_chunk(
     let mut out = vec![0u8; bytes.length() as usize];
     bytes.copy_to(&mut out);
     Ok(Some(String::from_utf8_lossy(&out).into_owned()))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn register_active_request(
+    request_id: &str,
+    controller: &AbortController,
+) -> Result<ActiveRequestGuard, BrowserError> {
+    ACTIVE_REQUESTS.with(|requests: &RefCell<HashMap<String, AbortController>>| {
+        let mut requests = requests.borrow_mut();
+        if requests.contains_key(request_id) {
+            return Err(BrowserError::RequestConflict(request_id.to_string()));
+        }
+        requests.insert(request_id.to_string(), controller.clone());
+        Ok(ActiveRequestGuard { request_id: request_id.to_string() })
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+fn map_fetch_error(request_id: &str, err: JsValue) -> BrowserError {
+    map_browser_error(&err, request_id, "browser fetch failed")
+}
+
+#[cfg(target_arch = "wasm32")]
+fn map_browser_error(err: &JsValue, request_id: &str, fallback: &str) -> BrowserError {
+    if is_abort_error(err) {
+        BrowserError::Canceled(request_id.to_string())
+    } else {
+        BrowserError::Fetch(format!("{fallback}: {err:?}"))
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn is_abort_error(err: &JsValue) -> bool {
+    Reflect::get(err, &JsValue::from_str("name"))
+        .ok()
+        .and_then(|value| value.as_string())
+        .is_some_and(|name| name == "AbortError")
 }
 
 #[cfg(test)]
@@ -483,5 +585,15 @@ mod tests {
             None,
         ));
         assert!(matches!(result, Err(CoreError::Provider(message)) if message.contains("wasm32")));
+    }
+
+    #[test]
+    fn native_cancel_is_idempotent() {
+        let runtime = BrowserProviderRuntime::new(
+            "deepseek",
+            Some("https://api.deepseek.com".to_string()),
+            Some("test".to_string()),
+        );
+        runtime.cancel("request-1").expect("cancel should be idempotent");
     }
 }

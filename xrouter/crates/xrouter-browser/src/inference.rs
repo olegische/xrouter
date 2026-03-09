@@ -39,7 +39,8 @@ impl TryFrom<&str> for BrowserProvider {
 
 pub struct BrowserInferenceClient {
     provider: BrowserProvider,
-    runtime: SharedProviderRuntime,
+    runtime: Arc<BrowserProviderRuntime>,
+    shared_runtime: SharedProviderRuntime,
 }
 
 impl BrowserInferenceClient {
@@ -49,19 +50,26 @@ impl BrowserInferenceClient {
         api_key: Option<String>,
     ) -> Self {
         let runtime = Arc::new(BrowserProviderRuntime::new(provider.as_str(), base_url, api_key));
-        Self { provider, runtime }
+        let shared_runtime: SharedProviderRuntime = runtime.clone();
+        Self { provider, runtime, shared_runtime }
+    }
+
+    pub fn cancel(&self, request_id: &str) -> Result<(), BrowserError> {
+        self.runtime.cancel(request_id)
     }
 
     pub async fn generate_text(
         &self,
+        request_id: &str,
         model: &str,
         input: &str,
     ) -> Result<ProviderOutcome, CoreError> {
-        self.generate_text_stream(model, input, None).await
+        self.generate_text_stream(request_id, model, input, None).await
     }
 
     pub async fn generate_text_stream(
         &self,
+        request_id: &str,
         model: &str,
         input: &str,
         sender: Option<&dyn ResponseEventSink>,
@@ -77,13 +85,9 @@ impl BrowserInferenceClient {
         };
         match self.provider {
             BrowserProvider::DeepSeek => {
-                let client = DeepSeekClient::with_runtime(self.runtime.clone());
+                let client = DeepSeekClient::with_runtime(self.shared_runtime.clone());
                 client
-                    .generate_stream(ProviderGenerateStreamRequest {
-                        request_id: "request",
-                        request,
-                        sender,
-                    })
+                    .generate_stream(ProviderGenerateStreamRequest { request_id, request, sender })
                     .await
             }
         }
@@ -91,10 +95,11 @@ impl BrowserInferenceClient {
 
     pub async fn generate_demo_prompt_stream(
         &self,
+        request_id: &str,
         model: &str,
         sender: Option<&dyn ResponseEventSink>,
     ) -> Result<ProviderOutcome, CoreError> {
-        self.generate_text_stream(model, DEFAULT_DEMO_PROMPT, sender).await
+        self.generate_text_stream(request_id, model, DEFAULT_DEMO_PROMPT, sender).await
     }
 }
 
@@ -117,13 +122,26 @@ mod tests {
             Some("https://api.deepseek.com".to_string()),
             Some("test".to_string()),
         );
-        let result =
-            futures::executor::block_on(client.generate_demo_prompt_stream("deepseek-chat", None));
+        let result = futures::executor::block_on(client.generate_demo_prompt_stream(
+            "request-1",
+            "deepseek-chat",
+            None,
+        ));
         assert!(matches!(result, Err(CoreError::Provider(message)) if message.contains("wasm32")));
     }
 
     #[test]
     fn demo_prompt_stays_stable() {
         assert_eq!(DEFAULT_DEMO_PROMPT, "Hello, what can you do?");
+    }
+
+    #[test]
+    fn cancel_is_idempotent_on_native() {
+        let client = BrowserInferenceClient::new(
+            BrowserProvider::DeepSeek,
+            Some("https://api.deepseek.com".to_string()),
+            Some("test".to_string()),
+        );
+        client.cancel("request-1").expect("cancel should be idempotent");
     }
 }

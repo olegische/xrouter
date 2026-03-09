@@ -13,6 +13,7 @@ use crate::{
 
 #[derive(Debug, Serialize)]
 struct BrowserRunResult {
+    request_id: String,
     text: String,
     output_tokens: u32,
     reasoning: Option<String>,
@@ -89,31 +90,39 @@ impl WasmBrowserClient {
     #[wasm_bindgen(js_name = runDemoPromptStream)]
     pub async fn run_demo_prompt_stream(
         &self,
+        request_id: String,
         model: String,
         on_event: Function,
     ) -> Result<JsValue, JsValue> {
-        self.run_text_stream(model, DEFAULT_DEMO_PROMPT.to_string(), on_event).await
+        self.run_text_stream(request_id, model, DEFAULT_DEMO_PROMPT.to_string(), on_event).await
     }
 
     #[wasm_bindgen(js_name = runTextStream)]
     pub async fn run_text_stream(
         &self,
+        request_id: String,
         model: String,
         input: String,
         on_event: Function,
     ) -> Result<JsValue, JsValue> {
-        let sink = JsCallbackSink::new("request".to_string(), on_event);
+        let sink = JsCallbackSink::new(request_id.clone(), on_event);
         let outcome = self
             .inference
-            .generate_text_stream(&model, &input, Some(&sink))
+            .generate_text_stream(&request_id, &model, &input, Some(&sink))
             .await
             .map_err(|error| JsValue::from_str(&error.to_string()))?;
         let result = BrowserRunResult {
+            request_id,
             text: outcome.chunks.join(""),
             output_tokens: outcome.output_tokens,
             reasoning: outcome.reasoning,
             emitted_live: outcome.emitted_live,
         };
         to_value(&result).map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
+    #[wasm_bindgen]
+    pub fn cancel(&self, request_id: String) -> Result<(), JsValue> {
+        self.inference.cancel(&request_id).map_err(|error| JsValue::from_str(&error.to_string()))
     }
 }
