@@ -1,5 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
+use async_trait::async_trait;
 use futures::StreamExt;
 use opentelemetry::{global, propagation::Injector, trace::Status};
 use reqwest::Client;
@@ -18,6 +19,7 @@ use crate::parser::{
     extract_chat_reasoning_delta, extract_responses_text_delta, map_chat_completion_response,
     map_chat_completion_stream_text, map_responses_api_response, map_responses_stream_text,
 };
+use crate::runtime::ProviderRuntime;
 
 const STREAM_DEBUG_SAMPLE_EVERY: usize = 25;
 const STREAM_DEBUG_PREVIEW_LIMIT: usize = 120;
@@ -56,7 +58,7 @@ impl HttpRuntime {
         Self { provider_id, base_url, api_key, http_client, max_inflight }
     }
 
-    pub(crate) fn api_key(&self) -> Option<&str> {
+    pub(crate) fn api_key_ref(&self) -> Option<&str> {
         self.api_key.as_deref().filter(|value| !value.trim().is_empty())
     }
 
@@ -123,7 +125,7 @@ impl HttpRuntime {
                 let mut request =
                     client.post(url).header("Content-Type", "application/json").json(payload);
                 request = inject_trace_headers(request);
-                if let Some(token) = bearer_override.or(self.api_key()) {
+                if let Some(token) = bearer_override.or(self.api_key_ref()) {
                     request = request.bearer_auth(token);
                 }
                 for (name, value) in extra_headers {
@@ -513,7 +515,7 @@ impl HttpRuntime {
         Ok(outcome)
     }
 
-    pub(crate) async fn post_form<T: DeserializeOwned>(
+    async fn post_form<T: DeserializeOwned>(
         &self,
         url: &str,
         form_fields: &[(String, String)],
@@ -534,6 +536,68 @@ impl HttpRuntime {
             .json::<T>()
             .await
             .map_err(|err| CoreError::Provider(format!("provider response parse failed: {err}")))
+    }
+}
+
+#[async_trait]
+impl ProviderRuntime for HttpRuntime {
+    fn api_key(&self) -> Option<String> {
+        self.api_key_ref().map(ToString::to_string)
+    }
+
+    fn build_url(&self, path: &str) -> Result<String, CoreError> {
+        HttpRuntime::build_url(self, path)
+    }
+
+    async fn post_chat_completions_stream(
+        &self,
+        request_id: &str,
+        url: &str,
+        payload: &Value,
+        bearer_override: Option<&str>,
+        extra_headers: &[(String, String)],
+        sender: Option<&dyn ResponseEventSink>,
+    ) -> Result<ProviderOutcome, CoreError> {
+        HttpRuntime::post_chat_completions_stream(
+            self,
+            request_id,
+            url,
+            payload,
+            bearer_override,
+            extra_headers,
+            sender,
+        )
+        .await
+    }
+
+    async fn post_responses_stream(
+        &self,
+        request_id: &str,
+        url: &str,
+        payload: &Value,
+        bearer_override: Option<&str>,
+        extra_headers: &[(String, String)],
+        sender: Option<&dyn ResponseEventSink>,
+    ) -> Result<ProviderOutcome, CoreError> {
+        HttpRuntime::post_responses_stream(
+            self,
+            request_id,
+            url,
+            payload,
+            bearer_override,
+            extra_headers,
+            sender,
+        )
+        .await
+    }
+
+    async fn post_form_json(
+        &self,
+        url: &str,
+        form_fields: &[(String, String)],
+        headers: &[(String, String)],
+    ) -> Result<Value, CoreError> {
+        self.post_form::<Value>(url, form_fields, headers).await
     }
 }
 

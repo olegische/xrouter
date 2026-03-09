@@ -1,8 +1,11 @@
 use async_trait::async_trait;
+#[cfg(not(target_arch = "wasm32"))]
 use reqwest::Client;
 use serde_json::Map;
 use serde_json::Value;
 use serde_json::json;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Arc;
 use tracing::{debug, info};
 use xrouter_contracts::{ReasoningConfig, ResponsesInput};
 use xrouter_core::{
@@ -11,28 +14,33 @@ use xrouter_core::{
 };
 
 use crate::protocol::base_chat_payload;
+use crate::runtime::SharedProviderRuntime;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::transport::HttpRuntime;
 
 pub struct ZaiClient {
-    runtime: HttpRuntime,
+    runtime: SharedProviderRuntime,
 }
 
 impl ZaiClient {
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new(
         base_url: Option<String>,
         api_key: Option<String>,
         http_client: Option<Client>,
         max_inflight: Option<usize>,
     ) -> Self {
-        Self {
-            runtime: HttpRuntime::new(
-                "zai".to_string(),
-                base_url,
-                api_key,
-                http_client,
-                max_inflight,
-            ),
-        }
+        Self::with_runtime(Arc::new(HttpRuntime::new(
+            "zai".to_string(),
+            base_url,
+            api_key,
+            http_client,
+            max_inflight,
+        )))
+    }
+
+    pub fn with_runtime(runtime: SharedProviderRuntime) -> Self {
+        Self { runtime }
     }
 }
 

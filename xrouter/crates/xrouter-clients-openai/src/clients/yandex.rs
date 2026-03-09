@@ -1,6 +1,9 @@
 use async_trait::async_trait;
+#[cfg(not(target_arch = "wasm32"))]
 use reqwest::Client;
 use serde_json::{Map, Value, json};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Arc;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 use xrouter_contracts::{
@@ -11,17 +14,20 @@ use xrouter_core::{
     ProviderOutcome,
 };
 
+use crate::runtime::SharedProviderRuntime;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::transport::HttpRuntime;
 
 const LEGACY_TOOL_CALL_START_MARKER: &str = "[TOOL_CALL_START]";
 const LEGACY_TOOL_CALL_END_MARKER: &str = "[TOOL_CALL_END]";
 
 pub struct YandexResponsesClient {
-    runtime: HttpRuntime,
+    runtime: SharedProviderRuntime,
     project: Option<String>,
 }
 
 impl YandexResponsesClient {
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new(
         base_url: Option<String>,
         api_key: Option<String>,
@@ -29,16 +35,20 @@ impl YandexResponsesClient {
         http_client: Option<Client>,
         max_inflight: Option<usize>,
     ) -> Self {
-        Self {
-            runtime: HttpRuntime::new(
+        Self::with_runtime(
+            Arc::new(HttpRuntime::new(
                 "yandex".to_string(),
                 base_url,
                 api_key,
                 http_client,
                 max_inflight,
-            ),
+            )),
             project,
-        }
+        )
+    }
+
+    pub fn with_runtime(runtime: SharedProviderRuntime, project: Option<String>) -> Self {
+        Self { runtime, project }
     }
 }
 

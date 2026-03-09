@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
@@ -13,7 +14,6 @@ xrouter-contracts = { path = "../xrouter-contracts" }
 xrouter-core = { path = "../xrouter-core" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-async-trait.workspace = true
 futures.workspace = true
 opentelemetry.workspace = true
 reqwest.workspace = true

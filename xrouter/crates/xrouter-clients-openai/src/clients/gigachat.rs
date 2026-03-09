@@ -18,6 +18,7 @@ use xrouter_core::{
     ProviderOutcome,
 };
 
+use crate::runtime::SharedProviderRuntime;
 use crate::transport::HttpRuntime;
 
 const GIGACHAT_OAUTH_URL: &str = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth";
@@ -25,7 +26,7 @@ const GIGACHAT_DEFAULT_SCOPE: &str = "GIGACHAT_API_PERS";
 const TOKEN_REFRESH_BUFFER_MS: i64 = 60_000;
 
 pub struct GigachatClient {
-    runtime: HttpRuntime,
+    runtime: SharedProviderRuntime,
     scope: String,
     token_state: Arc<Mutex<Option<GigachatToken>>>,
 }
@@ -39,13 +40,13 @@ impl GigachatClient {
         max_inflight: Option<usize>,
     ) -> Self {
         Self {
-            runtime: HttpRuntime::new(
+            runtime: Arc::new(HttpRuntime::new(
                 "gigachat".to_string(),
                 base_url,
                 authorization_key,
                 http_client,
                 max_inflight,
-            ),
+            )),
             scope: scope.unwrap_or_else(|| GIGACHAT_DEFAULT_SCOPE.to_string()),
             token_state: Arc::new(Mutex::new(None)),
         }
@@ -71,8 +72,10 @@ impl GigachatClient {
         ];
         let form_fields = vec![("scope".to_string(), self.scope.clone())];
 
-        let response: GigachatOauthResponse =
-            self.runtime.post_form(GIGACHAT_OAUTH_URL, &form_fields, &headers).await?;
+        let response: GigachatOauthResponse = serde_json::from_value(
+            self.runtime.post_form_json(GIGACHAT_OAUTH_URL, &form_fields, &headers).await?,
+        )
+        .map_err(|err| CoreError::Provider(format!("provider response parse failed: {err}")))?;
 
         let token = GigachatToken {
             access_token: response.access_token,

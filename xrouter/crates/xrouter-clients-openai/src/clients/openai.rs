@@ -1,6 +1,9 @@
 use async_trait::async_trait;
+#[cfg(not(target_arch = "wasm32"))]
 use reqwest::Client;
 use serde_json::{Value, json};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Arc;
 use xrouter_contracts::{ReasoningConfig, ResponsesInput};
 use xrouter_core::{
     CoreError, ProviderClient, ProviderGenerateRequest, ProviderGenerateStreamRequest,
@@ -8,13 +11,16 @@ use xrouter_core::{
 };
 
 use crate::protocol::base_chat_payload;
+use crate::runtime::SharedProviderRuntime;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::transport::HttpRuntime;
 
 pub struct OpenAiClient {
-    runtime: HttpRuntime,
+    runtime: SharedProviderRuntime,
 }
 
 impl OpenAiClient {
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new(
         provider_id: String,
         base_url: Option<String>,
@@ -22,9 +28,17 @@ impl OpenAiClient {
         http_client: Option<Client>,
         max_inflight: Option<usize>,
     ) -> Self {
-        Self {
-            runtime: HttpRuntime::new(provider_id, base_url, api_key, http_client, max_inflight),
-        }
+        Self::with_runtime(Arc::new(HttpRuntime::new(
+            provider_id,
+            base_url,
+            api_key,
+            http_client,
+            max_inflight,
+        )))
+    }
+
+    pub fn with_runtime(runtime: SharedProviderRuntime) -> Self {
+        Self { runtime }
     }
 }
 

@@ -62,7 +62,8 @@ Completed so far:
 4. `xrouter-clients-openai` was split so `parser` and `protocol` are portable while native
    `clients` and `transport` stay target-gated
 5. `xrouter-clients-openai` now passes `cargo check -p xrouter-clients-openai --target wasm32-unknown-unknown`
-6. native validation stayed green:
+6. a portable `ProviderRuntime` boundary now exists between provider clients and native transport
+7. native validation stayed green:
    - `cargo check -p xrouter-app`
    - `cargo test -p xrouter-clients-openai`
    - `cargo test --all-features`
@@ -71,7 +72,7 @@ Completed so far:
 Current active focus:
 
 1. browser model discovery extraction from `xrouter-app/startup`
-2. browser transport boundary design for streamed inference
+2. browser-facing runtime implementation on top of the completed transport boundary
 
 ## Phase 0: Track Setup
 
@@ -129,7 +130,7 @@ Completed:
 
 Status:
 
-- in progress
+- completed
 
 Objective:
 
@@ -157,8 +158,17 @@ Exit criteria:
 Progress:
 
 1. `xrouter-clients-openai` now exposes portable `parser` and `protocol` modules publicly
-2. native `clients` and `transport` are target-gated out of wasm builds
-3. the actual browser runtime/stream transport abstraction is not implemented yet
+2. provider clients no longer depend directly on concrete native transport internals
+3. a portable `ProviderRuntime` trait now defines the runtime seam for:
+   - URL construction
+   - streamed chat execution
+   - streamed responses execution
+   - form-post JSON execution
+4. native `HttpRuntime` implements that trait
+5. native-only constructors remain for server compatibility, while portable `with_runtime(...)`
+   constructors exist for future browser injection
+6. `gigachat` remains native-only for now because its OAuth/token lifecycle is not part of the
+   first browser provider slice
 
 ## Phase 3: Browser Model Discovery Boundary
 
