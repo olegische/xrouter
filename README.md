@@ -7,6 +7,7 @@ Rust implementation of XRouter with OpenAI Responses API as the canonical extern
 - Core orchestration with an explicit pipeline: `ingest -> tokenize -> generate`
 - Chat Completions adapter on top of the Responses flow
 - Provider clients as separate Rust crates
+- Browser/WASM-compatible router library in `xrouter-browser`
 - Formal lifecycle model in TLA+
 
 ## Repository Structure
@@ -19,8 +20,10 @@ Rust implementation of XRouter with OpenAI Responses API as the canonical extern
 |  |  |- xrouter-core       # orchestration/use-cases
 |  |  |- xrouter-contracts  # canonical DTOs/contracts
 |  |  |- xrouter-clients-openai
+|  |  |- xrouter-browser    # browser/WASM composition root
 |  |  |- xrouter-observability
 |  |- docs/                 # Rust workspace documentation
+|- browser-demo/            # optional Vite/Svelte demo harness for xrouter-browser
 |- formal/                  # formal model and property mapping
 |- docs/                    # project playbooks
 ```
@@ -42,6 +45,34 @@ just run
 
 By default, the server starts on `127.0.0.1:3000`.
 
+## Browser/WASM
+
+XRouter now also has a browser/WASM-compatible router library:
+
+- crate: `xrouter/crates/xrouter-browser`
+- architecture: `xrouter/crates/xrouter-browser/ARCHITECTURE.md`
+- plan/status: `xrouter/crates/xrouter-browser/PLAN.md`
+- consumer usage: `xrouter/crates/xrouter-browser/README.md`
+
+Current accepted browser-safe providers:
+
+- `deepseek`
+- `openai`
+- `openrouter`
+- `zai`
+
+Currently excluded from the wasm slice:
+
+- `yandex`
+- `gigachat`
+
+Optional browser demo harness:
+
+```bash
+just demo-install
+just demo-dev
+```
+
 ## Main Commands
 
 From the repository root:
@@ -53,6 +84,7 @@ just clippy    # cargo clippy --all-targets --all-features -- -D warnings
 just test      # cargo test --all-features
 just run       # run xrouter-app
 just dev       # development script
+just demo-dev  # run optional browser demo harness
 ```
 
 Provider checks:
@@ -128,6 +160,8 @@ Swagger/OpenAPI:
 ## Documentation
 
 - Architecture: `ARCHITECTURE.md`
+- Browser/WASM architecture: `xrouter/crates/xrouter-browser/ARCHITECTURE.md`
+- Browser/WASM usage: `xrouter/crates/xrouter-browser/README.md`
 - Rust workspace architecture: `xrouter/docs/architecture.md`
 - Testing strategy: `xrouter/docs/testing.md`
 - Formal model: `formal/xrouter.tla`

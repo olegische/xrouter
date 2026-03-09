@@ -136,6 +136,30 @@ If you are looking for:
 
 start here.
 
+### `xrouter/crates/xrouter-browser`
+
+This crate is the browser/WASM composition root.
+
+If you are looking for:
+
+- wasm export surface: `bindings.rs`
+- browser model discovery: `discovery.rs`
+- browser inference entrypoints: `inference.rs`
+- browser transport and cancellation: `runtime.rs`
+
+Important types:
+
+- `WasmBrowserClient`
+- `BrowserModelDiscoveryClient`
+- `BrowserInferenceClient`
+- `BrowserProviderRuntime`
+- `BrowserProvider`
+
+**Architecture Invariant:** `xrouter-browser` is a reusable browser router library, not a UI app.
+
+**Architecture Invariant:** `xrouter-browser` may depend on portable shared crates, but must not
+depend on `xrouter-app` or other native-only composition layers.
+
 ## Boundaries
 
 These boundaries are important and should stay visible in code.
@@ -180,6 +204,16 @@ This means:
 
 1. new behavior should be designed against Responses-first canonical models
 2. chat-specific mapping should stay in adapter code, not leak into core semantics
+
+### Server -> Browser Product
+
+`xrouter-app` and `xrouter-browser` are separate composition roots over the same portable core.
+
+This means:
+
+1. server-specific concerns stay in `xrouter-app`
+2. browser-specific transport and wasm export concerns stay in `xrouter-browser`
+3. shared logic should be extracted into portable crates rather than duplicated across both roots
 
 ## Architecture Invariants
 
@@ -228,16 +262,5 @@ If you change lifecycle semantics, update the formal artifacts in `formal/`.
 
 If you only refactor code while preserving lifecycle semantics, the formal model should stay
 unchanged.
-
-## Near-Term Direction
-
-The large structural refactor is complete.
-
-Near-term work should mostly be:
-
-1. strengthening behavior coverage
-2. adding capabilities without weakening existing boundaries
-3. keeping composition explicit
-4. keeping provider logic separate from transport and route adaptation
 
 WASM-specific architecture is tracked separately with `xrouter-browser`.

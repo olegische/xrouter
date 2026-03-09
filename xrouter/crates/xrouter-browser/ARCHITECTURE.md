@@ -150,13 +150,22 @@ Important consequence for the demo:
 
 This crate is the production location for browser/WASM-specific Rust code.
 
-It should contain:
+If you are looking for:
 
-1. browser-safe execution logic
-2. browser runtime adapters
-3. wasm exports
-4. browser model discovery
-5. browser-specific documentation for architecture, plan, and usage
+1. wasm export surface: `bindings.rs`
+2. browser model discovery: `discovery.rs`
+3. browser error surface: `error.rs`
+4. provider selection and browser inference entrypoints: `inference.rs`
+5. browser fetch/stream execution and cancellation: `runtime.rs`
+
+Important types:
+
+1. `WasmBrowserClient`
+2. `BrowserModelDiscoveryClient`
+3. `BrowserInferenceClient`
+4. `BrowserProviderRuntime`
+5. `BrowserProvider`
+6. `BrowserError`
 
 The browser demo frontend should be a separate app, not part of the Rust crate itself.
 
