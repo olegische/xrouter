@@ -10,7 +10,8 @@ use xrouter_core::{
     ProviderOutcome,
 };
 
-use crate::{HttpRuntime, base_chat_payload};
+use crate::protocol::base_chat_payload;
+use crate::transport::HttpRuntime;
 
 pub struct XrouterClient {
     runtime: HttpRuntime,

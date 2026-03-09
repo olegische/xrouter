@@ -138,18 +138,28 @@ Exit criteria:
 
 Status:
 
-- pending
+- completed
 
 Objective:
 
 - separate provider behavior from HTTP/runtime adapters
 
-Work:
+Completed work:
 
-1. isolate request shaping and response parsing
-2. isolate retries, concurrency limits, and HTTP execution
-3. keep provider quirks local to provider modules
-4. remove route-layer knowledge of concrete providers
+- extracted native HTTP runtime, retry/backoff, trace-header injection, and stream transport
+  execution into `xrouter-clients-openai/src/transport.rs`
+- extracted request-shaping helpers into `xrouter-clients-openai/src/protocol.rs`
+- extracted response parsing and stream normalization into
+  `xrouter-clients-openai/src/parser.rs`
+- kept provider-specific clients pointed at the new modules without changing external behavior
+- preserved existing app integration and regression coverage while reducing `lib.rs` mixing of
+  transport and provider concerns
+- moved transport/protocol/parser tests next to their modules so `lib.rs` is no longer the default
+  home for cross-layer test logic
+- switched provider client modules from crate-root convenience imports to explicit
+  `protocol`/`transport` module dependencies
+- moved provider-specific invariants out of the crate root and into provider modules so
+  `xrouter-clients-openai/src/lib.rs` is now a thin module root plus public exports
 
 Exit criteria:
 

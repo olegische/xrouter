@@ -7,7 +7,8 @@ use xrouter_core::{
     ProviderOutcome,
 };
 
-use crate::{HttpRuntime, base_chat_payload};
+use crate::protocol::base_chat_payload;
+use crate::transport::HttpRuntime;
 
 pub struct OpenAiClient {
     runtime: HttpRuntime,
@@ -92,4 +93,26 @@ fn normalize_openai_reasoning(reasoning: Option<&ReasoningConfig>) -> Option<Val
     }
     let mapped = if effort.eq_ignore_ascii_case("xhigh") { "high" } else { effort };
     Some(json!({ "effort": mapped }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_openai_payload;
+    use serde_json::json;
+    use xrouter_contracts::{ReasoningConfig, ResponsesInput};
+
+    #[test]
+    fn maps_xhigh_to_high() {
+        let input = ResponsesInput::Text("Reply with ok".to_string());
+        let reasoning = ReasoningConfig { effort: Some("xhigh".to_string()) };
+        let payload = build_openai_payload("gpt-4.1-mini", &input, Some(&reasoning), None, None);
+        assert_eq!(payload["reasoning"]["effort"], "high");
+    }
+
+    #[test]
+    fn forces_stream_true() {
+        let input = ResponsesInput::Text("hello".to_string());
+        let payload = build_openai_payload("gpt-4.1-mini", &input, None, None, None);
+        assert_eq!(payload["stream"], json!(true));
+    }
 }

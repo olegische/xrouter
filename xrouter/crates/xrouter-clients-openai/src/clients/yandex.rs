@@ -11,7 +11,7 @@ use xrouter_core::{
     ProviderOutcome,
 };
 
-use crate::HttpRuntime;
+use crate::transport::HttpRuntime;
 
 const LEGACY_TOOL_CALL_START_MARKER: &str = "[TOOL_CALL_START]";
 const LEGACY_TOOL_CALL_END_MARKER: &str = "[TOOL_CALL_END]";
@@ -892,8 +892,9 @@ fn extract_sse_data_events(payload: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_yandex_responses_payload, map_yandex_responses_stream_text,
-        normalize_tool_choice_for_responses, sanitize_yandex_input,
+        build_yandex_responses_payload, build_yandex_upstream_model,
+        map_yandex_responses_stream_text, normalize_tool_choice_for_responses,
+        sanitize_yandex_input,
     };
     use serde_json::json;
     use std::collections::BTreeMap;
@@ -1097,5 +1098,39 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].kind.as_deref(), Some("function_call"));
         assert_eq!(items[1].kind.as_deref(), Some("function_call_output"));
+    }
+
+    #[test]
+    fn upstream_model_adds_gpt_prefix() {
+        let model = build_yandex_upstream_model("aliceai-llm/latest", Some("folder-123"))
+            .expect("model should build");
+        assert_eq!(model, "gpt://folder-123/aliceai-llm/latest");
+    }
+
+    #[test]
+    fn upstream_model_keeps_prefixed_model() {
+        let model = build_yandex_upstream_model(
+            "gpt://folder-123/yandexgpt-lite/latest",
+            Some("folder-123"),
+        )
+        .expect("model should pass through");
+        assert_eq!(model, "gpt://folder-123/yandexgpt-lite/latest");
+    }
+
+    #[test]
+    fn upstream_model_requires_project() {
+        let error = build_yandex_upstream_model("aliceai-llm/latest", None)
+            .expect_err("missing project should fail");
+        assert_eq!(
+            error.to_string(),
+            "provider error: provider project is not configured for yandex"
+        );
+    }
+
+    #[test]
+    fn responses_payload_forces_stream_true() {
+        let input = ResponsesInput::Text("hello".to_string());
+        let (payload, _) = build_yandex_responses_payload("gpt://p/m", &input, None, None);
+        assert_eq!(payload["stream"], json!(true));
     }
 }

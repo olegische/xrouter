@@ -10,7 +10,8 @@ use xrouter_core::{
     ProviderOutcome,
 };
 
-use crate::{HttpRuntime, base_chat_payload};
+use crate::protocol::base_chat_payload;
+use crate::transport::HttpRuntime;
 
 pub struct OpenRouterClient {
     runtime: HttpRuntime,
@@ -282,7 +283,7 @@ fn normalize_function_tool(tool: &Value) -> Option<Value> {
 mod tests {
     use super::{build_openrouter_payload, normalize_tool_choice_for_chat_completions};
     use serde_json::{Value, json};
-    use xrouter_contracts::ResponsesInput;
+    use xrouter_contracts::{ReasoningConfig, ResponsesInput};
 
     #[test]
     fn keeps_only_function_tools_and_tracks_drops() {
@@ -320,5 +321,22 @@ mod tests {
             Some(json!({"type":"function","function":{"name":"ping"}}))
         );
         assert_eq!(normalize_tool_choice_for_chat_completions(Some(&json!("auto")), false), None);
+    }
+
+    #[test]
+    fn keeps_reasoning_effort_as_is() {
+        let input = ResponsesInput::Text("Reply with ok".to_string());
+        let reasoning = ReasoningConfig { effort: Some("xhigh".to_string()) };
+        let (payload, _) =
+            build_openrouter_payload("openai/gpt-5.2", &input, Some(&reasoning), None, None);
+        assert_eq!(payload["reasoning"]["effort"], "xhigh");
+        assert!(payload.get("thinking").is_none());
+    }
+
+    #[test]
+    fn forces_stream_true() {
+        let input = ResponsesInput::Text("hello".to_string());
+        let (payload, _) = build_openrouter_payload("openai/gpt-5-mini", &input, None, None, None);
+        assert_eq!(payload["stream"], json!(true));
     }
 }

@@ -10,7 +10,8 @@ use xrouter_core::{
     ProviderOutcome,
 };
 
-use crate::{HttpRuntime, base_chat_payload};
+use crate::protocol::base_chat_payload;
+use crate::transport::HttpRuntime;
 
 pub struct ZaiClient {
     runtime: HttpRuntime,
@@ -275,7 +276,7 @@ fn normalize_function_tool(tool: &Value) -> Option<Value> {
 mod tests {
     use super::{build_zai_payload, normalize_tool_choice_for_chat_completions};
     use serde_json::{Value, json};
-    use xrouter_contracts::ResponsesInput;
+    use xrouter_contracts::{ReasoningConfig, ResponsesInput};
 
     #[test]
     fn keeps_only_function_tools_and_tracks_drops() {
@@ -350,5 +351,30 @@ mod tests {
             payload_tools[0]["function"]["parameters"],
             json!({"type":"object","properties":{}})
         );
+    }
+
+    #[test]
+    fn enables_thinking_when_effort_present() {
+        let input = ResponsesInput::Text("Reply with ok".to_string());
+        let reasoning = ReasoningConfig { effort: Some("high".to_string()) };
+        let (payload, _) = build_zai_payload("glm-5", &input, Some(&reasoning), None, None);
+        assert_eq!(payload["thinking"]["type"], "enabled");
+        assert!(payload.get("reasoning").is_none());
+    }
+
+    #[test]
+    fn disables_thinking_when_effort_none() {
+        let input = ResponsesInput::Text("Reply with ok".to_string());
+        let reasoning = ReasoningConfig { effort: Some("none".to_string()) };
+        let (payload, _) = build_zai_payload("glm-5", &input, Some(&reasoning), None, None);
+        assert_eq!(payload["thinking"]["type"], "disabled");
+        assert!(payload.get("reasoning").is_none());
+    }
+
+    #[test]
+    fn forces_stream_true() {
+        let input = ResponsesInput::Text("hello".to_string());
+        let (payload, _) = build_zai_payload("glm-5", &input, None, None, None);
+        assert_eq!(payload["stream"], json!(true));
     }
 }

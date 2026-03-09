@@ -10,7 +10,8 @@ use xrouter_core::{
     ProviderOutcome,
 };
 
-use crate::{HttpRuntime, base_chat_payload};
+use crate::protocol::base_chat_payload;
+use crate::transport::HttpRuntime;
 
 pub struct DeepSeekClient {
     runtime: HttpRuntime,
@@ -281,6 +282,7 @@ fn normalize_function_tool(tool: &Value) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use xrouter_contracts::ReasoningConfig;
 
     #[test]
     fn keeps_only_function_tools_and_tracks_drops() {
@@ -339,5 +341,31 @@ mod tests {
             Some(json!("none"))
         );
         assert_eq!(normalize_tool_choice_for_chat_completions(Some(&json!("auto")), false), None);
+    }
+
+    #[test]
+    fn chat_enables_thinking_when_effort_present() {
+        let input = ResponsesInput::Text("Reply with ok".to_string());
+        let reasoning = ReasoningConfig { effort: Some("medium".to_string()) };
+        let (payload, _) =
+            build_deepseek_payload("deepseek-chat", &input, Some(&reasoning), None, None);
+        assert_eq!(payload["thinking"]["type"], "enabled");
+        assert!(payload.get("reasoning").is_none());
+    }
+
+    #[test]
+    fn reasoner_does_not_set_thinking() {
+        let input = ResponsesInput::Text("Reply with ok".to_string());
+        let reasoning = ReasoningConfig { effort: Some("high".to_string()) };
+        let (payload, _) =
+            build_deepseek_payload("deepseek-reasoner", &input, Some(&reasoning), None, None);
+        assert!(payload.get("thinking").is_none());
+    }
+
+    #[test]
+    fn forces_stream_true() {
+        let input = ResponsesInput::Text("hello".to_string());
+        let (payload, _) = build_deepseek_payload("deepseek-chat", &input, None, None, None);
+        assert_eq!(payload["stream"], json!(true));
     }
 }

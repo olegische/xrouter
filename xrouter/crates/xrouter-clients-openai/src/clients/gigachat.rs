@@ -18,7 +18,7 @@ use xrouter_core::{
     ProviderOutcome,
 };
 
-use crate::HttpRuntime;
+use crate::transport::HttpRuntime;
 
 const GIGACHAT_OAUTH_URL: &str = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth";
 const GIGACHAT_DEFAULT_SCOPE: &str = "GIGACHAT_API_PERS";
@@ -1007,5 +1007,12 @@ mod tests {
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0]["role"], "assistant");
         assert_eq!(messages[1]["role"], "function");
+    }
+
+    #[test]
+    fn payload_forces_stream_true() {
+        let input = ResponsesInput::Text("hello".to_string());
+        let (payload, _) = build_gigachat_payload("GigaChat-Pro", &input, None, None);
+        assert_eq!(payload["stream"], json!(true));
     }
 }
