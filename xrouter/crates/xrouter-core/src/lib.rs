@@ -355,7 +355,8 @@ pub fn default_model_catalog() -> Vec<ModelDescriptor> {
     ]
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait ProviderClient: Send + Sync {
     async fn generate(
         &self,
@@ -372,7 +373,8 @@ pub trait ProviderClient: Send + Sync {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait ResponseEventSink: Send + Sync {
     async fn send(&self, event: Result<ResponseEvent, CoreError>);
 }
@@ -394,7 +396,8 @@ pub struct ProviderGenerateStreamRequest<'a> {
     pub sender: Option<&'a dyn ResponseEventSink>,
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait StageHandler: Send + Sync {
     fn stage(&self) -> StageName;
     async fn handle(&self, context: &mut ExecutionContext) -> Result<(), CoreError>;
@@ -402,7 +405,8 @@ pub trait StageHandler: Send + Sync {
 
 struct IngestHandler;
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl StageHandler for IngestHandler {
     fn stage(&self) -> StageName {
         StageName::Ingest
@@ -419,7 +423,8 @@ impl StageHandler for IngestHandler {
 
 struct TokenizeHandler;
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl StageHandler for TokenizeHandler {
     fn stage(&self) -> StageName {
         StageName::Tokenize
@@ -437,7 +442,8 @@ struct GenerateHandler {
     sender: Option<Arc<dyn ResponseEventSink>>,
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl StageHandler for GenerateHandler {
     fn stage(&self) -> StageName {
         StageName::Generate
@@ -945,7 +951,8 @@ mod tests {
         behavior: ProviderBehavior,
     }
 
-    #[async_trait]
+    #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+    #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
     impl ProviderClient for FakeProvider {
         async fn generate(
             &self,
@@ -1135,14 +1142,16 @@ usage_total=3
         events: Arc<Mutex<Vec<Result<ResponseEvent, CoreError>>>>,
     }
 
-    #[async_trait]
+    #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+    #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
     impl ResponseEventSink for CaptureSink {
         async fn send(&self, event: Result<ResponseEvent, CoreError>) {
             self.events.lock().expect("lock must succeed").push(event);
         }
     }
 
-    #[async_trait]
+    #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+    #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
     impl ProviderClient for AuthCaptureProvider {
         async fn generate(
             &self,

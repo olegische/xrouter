@@ -1,0 +1,22 @@
+[package]
+name = "xrouter-browser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+xrouter-clients-openai = { path = "../xrouter-clients-openai" }
+xrouter-contracts = { path = "../xrouter-contracts" }
+xrouter-core = { path = "../xrouter-core" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys.workspace = true
+serde-wasm-bindgen.workspace = true
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
+web-sys = { workspace = true, features = ["Headers", "ReadableStream", "ReadableStreamDefaultReader", "Request", "RequestInit", "Response", "Window"] }

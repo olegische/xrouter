@@ -45,12 +45,11 @@ Already completed in the main codebase:
 
 Main gaps still visible from the codebase:
 
-1. browser-safe transport does not exist yet
-2. browser model discovery does not exist yet
-3. `xrouter-app` currently owns startup model catalog assembly
-4. no dedicated browser crate exists yet
-5. no separate frontend demo app exists yet
-6. extraction targets inside `xrouter-app` are only partially mapped
+1. browser-safe streaming transport does not exist yet
+2. browser model discovery execution exists only for model listing, not for the full demo flow
+3. `xrouter-app` still owns parts of startup model catalog assembly
+4. no separate frontend demo app exists yet
+5. extraction targets inside `xrouter-app` are only partially mapped
 
 ## Current Status
 
@@ -200,13 +199,6 @@ Work:
 5. if logic is shared with the server product, move it into a portable crate instead of keeping it
    under `xrouter-app`
 
-Current next step:
-
-1. extract model descriptor mapping and provider model-list normalization out of
-   `xrouter-app/startup/model_catalog_remote.rs`
-2. keep native fetch logic working while making the normalization reusable by the future browser
-   crate
-
 Progress:
 
 1. provider model response DTOs, normalization, and registry fallback logic were moved into
@@ -218,7 +210,33 @@ Progress:
    - Gigachat OAuth and `/models`
 3. `xrouter-app` now acts as a native executor for those shared request shapes instead of owning
    the request construction itself
-4. browser-specific execution of those request shapes is not implemented yet
+4. a dedicated `xrouter-browser` crate now exists as the browser/WASM composition root
+5. `xrouter-browser` can execute shared model-discovery request shapes through browser `fetch`
+   for:
+   - OpenRouter `/models`
+   - generic provider `/models`
+   - xrouter `/models`
+6. browser model discovery now has explicit HTTP-status and JSON-parse failure handling
+7. browser-specific execution for streamed inference now exists through a browser implementation of
+   `ProviderRuntime`
+8. `xrouter-browser` now exposes a minimal inference API for the first browser-safe provider path:
+   - `BrowserInferenceClient`
+   - `BrowserProvider::DeepSeek`
+   - `DEFAULT_DEMO_PROMPT = "Hello, what can you do?"`
+9. `xrouter-browser` now also exposes a wasm-consumable API surface:
+   - `WasmBrowserClient`
+   - `fetchModelIds()`
+   - `runTextStream()`
+   - `runDemoPromptStream()`
+
+Current next step:
+
+1. validate the first provider path in a real browser host, not only through compile-time and
+   native fallback tests
+2. decide whether remaining model-catalog assembly in `xrouter-app` should move again or stay
+   server-owned
+3. start the separate Vite/Svelte demo app that consumes the wasm bundle instead of adding more UI
+   logic into the Rust crate
 
 Exit criteria:
 
@@ -231,7 +249,7 @@ Exit criteria:
 
 Status:
 
-- pending
+- in progress
 
 Objective:
 
@@ -255,6 +273,22 @@ Work:
 4. wire a browser-safe sink for live stream events
 5. validate one prompt round trip using `Hello, what can you do?`
 
+Progress:
+
+1. `xrouter-browser` now includes a browser implementation of `ProviderRuntime`
+2. that runtime reuses shared parser helpers for:
+   - chat-completions JSON responses
+   - chat-completions SSE parsing
+   - responses JSON responses
+   - responses SSE parsing
+3. `BrowserInferenceClient` now drives `DeepSeekClient` through `with_runtime(...)`
+4. the first browser-safe provider enum is explicit and narrow:
+   - `BrowserProvider::DeepSeek`
+5. wasm trait boundaries were updated to allow non-`Send` browser futures without weakening
+   native behavior
+6. a wasm callback sink now bridges streamed `ResponseEvent` values from Rust into JS consumers
+7. `WasmBrowserClient` now provides the browser-facing export surface for demo code
+
 Exit criteria:
 
 1. one provider works from browser/WASM through shared logic
@@ -265,7 +299,7 @@ Exit criteria:
 
 Status:
 
-- pending
+- completed
 
 Objective:
 
@@ -284,11 +318,6 @@ Why not `xrouter/wasm` as a crate:
 2. code crates should continue to live under `xrouter/crates/` with the rest of the workspace
 3. frontend app code should also stay separate from the Rust crate
 
-Note:
-
-1. crate creation is intentionally deferred until model discovery and browser transport seams are
-   clearer
-
 Work:
 
 1. add crate skeleton
@@ -306,6 +335,12 @@ Exit criteria:
 3. crate API is small enough that UI code does not rebuild transport/provider logic
 4. browser crate depends only on portable/shared crates plus browser-specific adapters
 5. the browser crate is cleanly separated from the frontend demo app
+
+Completed:
+
+1. `xrouter/crates/xrouter-browser` now exists in the workspace
+2. the crate owns browser model discovery and browser runtime code
+3. the crate exposes a small browser-facing API instead of leaking provider wiring into UI code
 
 ## Phase 6: Demo UI Integration
 
