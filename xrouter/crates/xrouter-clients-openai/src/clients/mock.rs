@@ -21,6 +21,9 @@ impl ProviderClient for MockProviderClient {
         let mut output_tokens = 0u32;
 
         let input_text = request.input.to_canonical_text();
+        if input_text.contains("__FAIL_PROVIDER__") {
+            return Err(CoreError::Provider("provider failed".to_string()));
+        }
         for token in input_text.split_whitespace() {
             output_tokens = output_tokens.saturating_add(1);
             chunks.push(format!("{token} "));

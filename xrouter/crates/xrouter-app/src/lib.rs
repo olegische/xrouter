@@ -708,6 +708,92 @@ json.first_id=<none>
     }
 
     #[tokio::test]
+    async fn responses_non_stream_surfaces_provider_failure_as_400() {
+        let app = build_router(test_app_state(false));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/responses")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"model":"deepseek/deepseek-chat","input":"__FAIL_PROVIDER__","stream":false}"#,
+                    ))
+                    .expect("request must build"),
+            )
+            .await
+            .expect("request must complete");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body read must succeed");
+        let payload: Value =
+            serde_json::from_slice(&body).expect("response body must be valid json");
+        assert_eq!(
+            payload.get("error").and_then(Value::as_str),
+            Some("provider error: provider failed")
+        );
+    }
+
+    #[tokio::test]
+    async fn responses_stream_emits_response_error_without_completion_on_provider_failure() {
+        let app = build_router(test_app_state(false));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/responses")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"model":"deepseek/deepseek-chat","input":"__FAIL_PROVIDER__","stream":true}"#,
+                    ))
+                    .expect("request must build"),
+            )
+            .await
+            .expect("request must complete");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body read must succeed");
+        let payload = String::from_utf8_lossy(&body);
+        assert!(payload.contains("event: response.created"));
+        assert!(payload.contains("event: response.error"));
+        assert!(payload.contains("\"error\":\"provider error: provider failed\""));
+        assert!(
+            !payload.contains("event: response.completed"),
+            "failed stream must not claim completion"
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_stream_emits_error_chunk_and_done_marker_on_provider_failure() {
+        let app = build_router(test_app_state(false));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"model":"deepseek/deepseek-chat","messages":[{"role":"user","content":"__FAIL_PROVIDER__"}],"stream":true}"#,
+                    ))
+                    .expect("request must build"),
+            )
+            .await
+            .expect("request must complete");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body read must succeed");
+        let payload = String::from_utf8_lossy(&body);
+        assert!(payload.contains("\"error\":\"provider error: provider failed\""));
+        assert!(payload.contains("[DONE]"), "chat stream must still terminate with done marker");
+    }
+
+    #[tokio::test]
     async fn chat_non_stream_maps_tool_call_to_choice_message() {
         let app = build_router(test_app_state(false));
         let response = app

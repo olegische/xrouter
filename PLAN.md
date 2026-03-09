@@ -169,18 +169,26 @@ Exit criteria:
 
 Status:
 
-- pending
+- completed
 
 Objective:
 
 - strengthen coverage around the stabilized seams
 
-Work:
+Completed work:
 
-1. add deterministic scenario tests for streaming and failures
-2. verify disconnect semantics through public APIs
-3. keep outbound request assertions close to provider/client tests
-4. update formal artifacts if lifecycle semantics ever change
+1. added deterministic route-level failure coverage in `xrouter-app` for:
+   - non-stream provider failure on Responses API
+   - Responses SSE failure without false completion
+   - Chat Completions SSE failure with terminal done marker
+2. added explicit `xrouter-core` public API tests for disconnect semantics on the sink-based
+   streaming boundary:
+   - ingest disconnect emits stream error without completion
+   - generate disconnect preserves successful completion
+3. hardened the mock provider path so public API failure scenarios are exercised without external
+   network or provider dependencies
+4. kept formal artifacts unchanged because lifecycle semantics did not change; tests now better pin
+   the existing contract
 
 Exit criteria:
 

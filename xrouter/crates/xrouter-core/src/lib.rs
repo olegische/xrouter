@@ -1241,4 +1241,65 @@ usage_total=3
             events.iter().any(|event| matches!(event, Ok(ResponseEvent::ResponseError { .. })))
         );
     }
+
+    #[tokio::test]
+    async fn execute_stream_to_sink_with_ingest_disconnect_emits_error_without_completion() {
+        let engine = ExecutionEngine::new(build_provider(ProviderBehavior::Success));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::new(CaptureSink { events: events.clone() });
+        let request = ResponsesRequest {
+            model: "fake".to_string(),
+            input: xrouter_contracts::ResponsesInput::Text("hello".to_string()),
+            stream: true,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+        };
+
+        let result =
+            engine.execute_stream_to_sink(request, Some(StageName::Ingest), None, sink).await;
+
+        assert_eq!(result, Err(CoreError::ClientDisconnected(StageName::Ingest)));
+        let events = events.lock().expect("lock must succeed");
+        assert!(
+            events.iter().any(|event| matches!(event, Ok(ResponseEvent::ResponseError { .. }))),
+            "ingest disconnect must surface as stream error event"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, Ok(ResponseEvent::ResponseCompleted { .. }))),
+            "ingest disconnect must not emit completion"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_stream_to_sink_with_generate_disconnect_keeps_completed_event() {
+        let engine = ExecutionEngine::new(build_provider(ProviderBehavior::Success));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::new(CaptureSink { events: events.clone() });
+        let request = ResponsesRequest {
+            model: "fake".to_string(),
+            input: xrouter_contracts::ResponsesInput::Text("hello".to_string()),
+            stream: true,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+        };
+
+        engine
+            .execute_stream_to_sink(request, Some(StageName::Generate), None, sink)
+            .await
+            .expect("generate disconnect must not cancel in-flight generation");
+
+        let events = events.lock().expect("lock must succeed");
+        assert!(
+            events.iter().any(|event| matches!(event, Ok(ResponseEvent::ResponseCompleted { .. }))),
+            "generate disconnect must still emit completion"
+        );
+        assert!(
+            !events.iter().any(|event| matches!(event, Err(CoreError::ClientDisconnected(_)))),
+            "generate disconnect must not surface as stream error"
+        );
+    }
 }

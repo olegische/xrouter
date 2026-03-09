@@ -2,215 +2,168 @@
 
 ## Project Context
 
-This repository is treated as a new Rust project.
-The legacy Python code in `src/` is temporary and does not define architectural rules for the new codebase.
-The primary goal is to migrate domain logic to Rust with predictable quality and testability.
-Rust code is expected to live under `xrouter/`.
+XRouter is a Rust codebase with the active workspace under `xrouter/`.
+
+Rust is the source of truth.
+
+Canonical project architecture is documented in `ARCHITECTURE.md`.
 
 ## Baseline Quality Contract
 
-Every change must:
+Every code change must:
 
-1. Compile successfully.
-2. Pass formatting checks.
-3. Pass lint checks with no warnings (or with an explicitly documented exception).
-4. Include tests for impacted behavior (happy path + failure path).
-5. Avoid embedding secrets, tokens, private keys, or passwords in source code.
+1. compile successfully
+2. pass formatting checks
+3. pass lint checks with no warnings unless an exception is explicitly documented
+4. include tests for impacted behavior, including happy path and failure path where applicable
+5. avoid embedding secrets, tokens, private keys, or passwords in source code, fixtures, or logs
 
 ## Canonical Commands
 
-If a `justfile` exists, use it as the single entry point.
-Run Rust commands from `xrouter/` unless a different workspace root is explicitly introduced.
+If a `justfile` exists, use it as the preferred entry point.
+Run Rust commands from `xrouter/` unless a different workspace root is explicitly required.
 
 Minimum cycle after Rust code changes:
 
-1. `just fmt` (or `cargo fmt --all`).
-2. `cargo test -p <changed-crate>` for the impacted crate.
-3. If shared/core/protocol areas were touched: `cargo test --all-features`.
+1. `just fmt` or `cargo fmt --all`
+2. `cargo test -p <changed-crate>`
+3. `cargo test --all-features` when shared/core/contract boundaries changed
+4. `cargo clippy --all-targets --all-features -- -D warnings`
 
-Lints:
+If auto-fix is needed:
 
-1. `cargo clippy --all-targets --all-features -- -D warnings`.
-2. If auto-fix is needed: `just fix -p <crate>` (or equivalent).
-3. After `fix`: run `just fmt` again.
+1. `just fix -p <crate>` if available
+2. rerun `just fmt` or `cargo fmt --all`
 
-## Code Change Style
+## Architecture Rules
 
-1. Prefer editing existing architecture over adding one-off helper layers.
-2. Keep changes minimal and sufficient; avoid unrelated refactors in the same change.
-3. Do not hide failing checks: always report the exact failed command and reason.
-4. When config/schema/API contracts change, update related artifacts and docs in the same PR.
+1. `xrouter-app` is the composition root.
+2. `xrouter-core` owns orchestration and lifecycle semantics.
+3. `xrouter-contracts` owns canonical DTOs and shared typed boundaries.
+4. provider transport and provider-specific normalization belong in client crates, not in routes
+   or core orchestration
+5. route handlers must depend on abstractions and canonical models, not on provider quirks
+6. crate roots should stay thin; do not rebuild monolithic `lib.rs` files
+7. prefer explicit wiring and trait boundaries over hidden DI or global mutable state
 
-## Migration Architecture Rules
+## Lifecycle Contract
 
-1. Treat the Rust codebase as the source of truth; legacy Python code is reference material only.
-2. Keep request execution as a handler pipeline (Chain of Responsibility), but make handlers explicit and typed.
-3. Use canonical stage names: `ingest -> tokenize -> generate`.
-4. `ingest` is responsible for normalization and metadata enrichment (not only field remapping).
-5. Billing stages are out of active runtime scope; keep core flow non-billing.
-6. Do not use stage name `completion` in new Rust core flow; use `generate`.
-7. Replace container-heavy DI with an explicit composition root:
-   - configuration loading,
-   - dependency wiring,
-   - trait-based interfaces for services.
-8. Separate orchestration from transport:
-   - orchestration/use-cases in core crates,
-   - HTTP/provider clients in dedicated client crates.
-9. Provider integrations must be reusable client packages, not tightly coupled router internals.
-10. Avoid provider-specific condition branches in API routers; route layer should depend on abstractions only.
-11. Use one canonical internal request/response model and map adapters at boundaries.
+The active lifecycle contract is defined by `formal/xrouter.tla`.
 
-## Formal Model Contract (Mandatory)
+Required lifecycle semantics:
 
-The formal model in `formal/xrouter.tla` is the active lifecycle contract for scaffold and implementation.
+1. canonical flow is `ingest -> tokenize -> generate(stream) -> done|failed`
+2. `ingest` is responsible for normalization and execution-context enrichment
+3. `tokenize` is responsible for usage-related computation and metadata preparation
+4. `generate` may emit stream events before terminal completion
+5. disconnect in `ingest|tokenize` fails fast
+6. disconnect in `generate` does not cancel in-flight generation lifecycle
 
-1. Keep lifecycle semantics aligned with the formal stages:
-   - `ingest -> tokenize -> generate(stream) -> done|failed`.
-2. Preserve non-billing completion behavior:
-   - terminal success is represented by `done` with completed response semantics.
-3. Preserve disconnect behavior:
-   - disconnect in `ingest|tokenize` fails fast,
-   - disconnect in `generate` does not cancel in-flight generation lifecycle.
-4. Any active lifecycle semantics change requires:
-   - update of `formal/xrouter.tla`,
-   - update of `formal/property-map.md` and `formal/trace-schema.md`,
-   - successful TLC run with `formal/xrouter.cfg`,
-   - matching code/test updates in the same change.
-5. Legacy billing model is reference-only:
-   - `formal/xrouter_billing.tla`, `formal/xrouter_billing.cfg`,
-   - `formal/property-map-billing.md`, `formal/trace-schema-billing.md`.
+If lifecycle semantics change, the same change must update:
 
-## API Contract Baseline
+1. `formal/xrouter.tla`
+2. `formal/xrouter.cfg`
+3. `formal/property-map.md`
+4. `formal/trace-schema.md`
+5. matching Rust tests
 
-1. The canonical external contract is OpenAI Responses API.
-2. Legacy xrouter/openrouter-specific contract behavior is considered transitional and should not drive new Rust domain models.
-3. Chat Completions compatibility should be implemented as an adapter layer over the core Responses flow.
-4. Any intentional contract deviation must be documented in `docs/` with migration rationale and removal plan.
+## API Contract Rules
 
-## Migration Guardrails
+1. OpenAI Responses API is the canonical external contract.
+2. Chat Completions support is an adapter over the Responses flow.
+3. Intentional contract deviations must be documented in `docs/`.
+4. Do not let legacy or provider-specific payload shapes define internal domain models.
 
-1. Do not port placeholder business logic (for example fixed token estimates or hardcoded defaults used as temporary stubs).
-2. Do not hide degraded behavior behind implicit fallback; fallback behavior must be explicit, narrow, and observable.
-3. Any temporary compatibility hack must include:
-   - why it exists,
-   - when it can be removed,
-   - how correctness is protected until removal.
+## Provider Rules
 
-## Provider Normalization Rules
+1. Keep provider-specific normalization scoped to the target provider only.
+2. Perform canonicalization at boundaries, not in unrelated business logic.
+3. Shared retry, timeout, auth, and transport behavior belongs in transport modules.
+4. Fail-soft parsing is acceptable only when bounded, explicit, and observable.
+5. Temporary compatibility hacks must explain:
+   - why they exist
+   - what keeps them safe
+   - when they can be removed
 
-1. Keep provider-specific normalization scoped to the target provider only; non-target providers must preserve input/output unchanged.
-2. Perform canonicalization at boundaries (ingest/output adaptation), not inside unrelated business logic.
-3. Use fail-soft parsing with bounded repair steps for legacy payloads:
-   - retry known-safe repairs,
-   - do not silently mutate semantics,
-   - return original payload when normalization is not applicable.
-4. Keep temporary compatibility hacks local, explicit, and removable.
-5. Prefer small pure helper functions for normalization steps.
-6. Log structured payload summaries for debugging; never log secrets or raw sensitive payloads.
-
-## Observability Baseline
-
-1. Instrument LLM calls with OpenTelemetry spans from day one.
-2. Create dedicated spans for provider request start/end, stream lifecycle, and error paths.
-3. Propagate trace context through internal services and outgoing provider client calls.
-4. Include request/model/provider/generation identifiers as span attributes (without secrets).
-
-## Testing Policy (Primary Priority)
+## Testing Policy
 
 Primary pattern: deterministic scenario tests through public APIs.
 
-For each key scenario:
+For important flows:
 
-1. `Arrange`: start local mock/fake dependencies, prepare context, seed state.
-2. `Act`: execute one public operation.
-3. `Assert`: verify observable behavior across all relevant layers.
+1. arrange local mocks/fakes only
+2. execute one public operation
+3. assert observable behavior at the relevant boundary
 
-Required assertion layers (where applicable):
+Preferred assertion layers:
 
-1. Return value or error.
-2. Persistent state (file/database/storage).
-3. In-memory state (cache/managers/sessions).
-4. Outbound request contract (method/path/body/headers/count).
+1. returned value or returned error
+2. emitted stream events
+3. persistent or in-memory state when applicable
+4. outbound request contract for provider/client crates
 
 Reliability rules:
 
-1. Do not use real external APIs or network in tests.
-2. For global process state (for example env vars), serialize tests (`serial_test` or equivalent).
-3. Do not rely on wall clock drift; control time explicitly in tests.
-4. Use behavior-first test names (what should happen, not how it is implemented).
-5. Default to co-located tests near implementation (`#[cfg(test)] mod tests`) for autonomous delivery.
-6. Introduce a separate integration `tests/` directory only when cross-crate/e2e coverage requires it.
+1. do not use real external APIs or real network in tests
+2. do not rely on wall clock drift
+3. serialize tests if they touch global process state
+4. use behavior-first test names
+5. keep tests co-located near implementation unless cross-crate coverage requires otherwise
 
-## Snapshot Tests
+## Observability Rules
 
-Use snapshot tests only for stable text/UI output.
+1. provider request start/end, stream lifecycle, and error paths must remain observable
+2. propagate trace context through internal services and outgoing provider calls
+3. include request/model/provider identifiers as structured attributes
+4. never log secrets or raw credentials
 
-Rules:
+## Code Change Style
 
-1. Never accept snapshots automatically.
-2. Review diffs first, then accept only intended changes.
-3. Do not rely only on snapshots for critical behavior; add behavioral tests as well.
+1. prefer changing existing architecture over adding one-off helper layers
+2. keep changes minimal and sufficient
+3. avoid unrelated refactors in the same change unless they are required to make the boundary
+   coherent
+4. do not hide failing checks; report the exact failed command and why it failed
+5. when contracts, config, or public behavior change, update docs and tests in the same change
 
-## CI Gates
+## Repository Structure Guidance
 
-PR gate (fast):
-
-1. `cargo fmt --check`
-2. `cargo clippy --all-targets --all-features -- -D warnings`
-3. Targeted tests for changed crates/domains
-
-Full gate (merge/nightly):
-
-1. `cargo test --all-features`
-2. Snapshot checks (if used)
-3. Platform matrix if needed
-
-## Security and Operational Discipline
-
-1. Do not run destructive git commands without explicit request (`git reset --hard`, mass deletes, and similar).
-2. Do not bypass sandbox/permission controls.
-3. Do not add secrets to code, tests, fixtures, or logs.
-
-## Recommended New Rust Repository Structure
-
-This structure is a starting scaffold, not a frozen target architecture.
-The Codex implementer may revise crate boundaries and layout during implementation.
-Any scaffold change must include:
-
-1. Short rationale for the change.
-2. Updated documentation reflecting the new structure.
-3. Confirmation that canonical flow and contract rules remain intact.
+Current workspace direction:
 
 ```text
 /
   AGENTS.md
-  docs/
-    architecture.md
-    testing.md
-    codegen-policy.md
+  ARCHITECTURE.md
+  PLAN.md
+  formal/
   xrouter/
-    Cargo.lock
     Cargo.toml
     justfile
-    rustfmt.toml
     crates/
-      xrouter-app/                  # binary crate (axum/actix entrypoint, composition root)
-      xrouter-core/                 # orchestration, handler chain, domain services
-      xrouter-contracts/            # canonical API/domain DTOs (Responses-first)
-      xrouter-clients-openai/       # reusable OpenAI-compatible client
-      xrouter-clients-openrouter/   # reusable OpenRouter client
-      xrouter-clients-gigachat/     # reusable GigaChat client
-      xrouter-storage/              # cache/repository adapters
-      xrouter-observability/        # logging/tracing/metrics adapters
-    # no top-level tests directory by default; co-located tests are preferred
-    .github/workflows/rust-ci.yml
+      xrouter-app/
+      xrouter-core/
+      xrouter-contracts/
+      xrouter-clients-openai/
+      xrouter-observability/
 ```
+
+Crate boundaries may evolve, but any boundary change must include:
+
+1. a short rationale
+2. updated documentation
+3. preserved lifecycle and contract semantics unless explicitly changed
+
+## Security and Operational Discipline
+
+1. do not run destructive git commands without explicit request
+2. do not bypass sandbox or permission controls
+3. do not add secrets to code, tests, fixtures, or logs
 
 ## PR Acceptance Criteria
 
-A PR is ready when:
+A change is ready when:
 
-1. All required commands pass.
-2. Tests cover both success and failure behavior for impacted areas.
-3. Contract/config changes are reflected in code and documentation.
-4. No temporary assumptions remain without an explicit TODO, context, and removal plan.
+1. required commands pass
+2. impacted behavior has both success and failure coverage where it matters
+3. contract or config changes are reflected in docs and code
+4. no temporary assumption is left unexplained
