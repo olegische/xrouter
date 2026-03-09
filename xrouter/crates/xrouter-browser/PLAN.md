@@ -36,7 +36,7 @@ The broader architectural target behind that demo is:
 Definition of done for the XRouter wasm track:
 
 1. `xrouter-browser` is portable and browser-ready
-2. one provider path works in-browser with real streaming
+2. the accepted BYOK browser-safe providers work in-browser with real streaming
 3. browser model discovery works
 4. request-scoped cancellation exists
 5. the library is consumable by external hosts
@@ -59,7 +59,7 @@ Main gaps still visible from the codebase:
 
 ## Current Status
 
-Implementation has started.
+Implementation is complete for the current wasm scope.
 
 Completed so far:
 
@@ -78,9 +78,9 @@ Completed so far:
 
 Current active focus:
 
-1. stabilizing the consumer-facing wasm contract
-2. documenting packaging and ownership boundaries
-3. leaving downstream host integration out of `xrouter` scope
+1. keeping the accepted provider set stable
+2. leaving downstream host integration out of `xrouter` scope
+3. treating excluded providers as future work, not blockers
 
 ## Phase 0: Track Setup
 
@@ -225,9 +225,9 @@ Progress:
 6. browser model discovery now has explicit HTTP-status and JSON-parse failure handling
 7. browser-specific execution for streamed inference now exists through a browser implementation of
    `ProviderRuntime`
-8. `xrouter-browser` now exposes a minimal inference API for the first browser-safe provider path:
+8. `xrouter-browser` now exposes a minimal inference API for the browser-safe provider set:
    - `BrowserInferenceClient`
-   - `BrowserProvider::DeepSeek`
+   - `BrowserProvider::{DeepSeek, OpenAi, OpenRouter, Zai}`
    - `DEFAULT_DEMO_PROMPT = "Hello, what can you do?"`
 9. `xrouter-browser` now also exposes a wasm-consumable API surface:
    - `WasmBrowserClient`
@@ -252,20 +252,24 @@ Objective:
 
 Get one provider working end to end through the browser-safe path.
 
-Recommended first provider:
+Accepted browser-safe provider set:
 
-- `deepseek`
+1. `deepseek`
+2. `openai`
+3. `openrouter`
+4. `zai`
 
-Why:
+Explicitly excluded for now:
 
-1. it is close to the OpenAI-compatible path already supported
-2. it supports the required browser demo shape
-3. it avoids early complexity from provider-specific auth dances
+1. `yandex`
+   requires extra project/folder configuration beyond a simple API key
+2. `gigachat`
+   requires an OAuth/token flow that is intentionally out of the current wasm slice
 
 Work:
 
-1. wire the first provider through browser-safe request building
-2. wire browser transport into the provider client
+1. wire the accepted BYOK providers through browser-safe request building
+2. wire browser transport into the provider clients
 3. verify stream parsing in the browser
 4. verify request-scoped cancellation
 5. expose a minimal wasm-consumable API for host runtimes
@@ -273,14 +277,18 @@ Work:
 Completed:
 
 1. `BrowserProviderRuntime` executes streamed provider requests in the browser
-2. `BrowserInferenceClient` drives the first browser-safe `deepseek` path end to end
-3. `WasmBrowserClient` exposes the browser-safe DeepSeek flow to JS consumers
+2. `BrowserInferenceClient` drives the accepted browser-safe provider set end to end
+3. `WasmBrowserClient` exposes the browser-safe provider set to JS consumers
 4. request-scoped cancellation now exists through `cancel(request_id)`
-5. manual smoke validated real browser model loading, live streaming, and cancellation
+5. manual smoke validated real browser model loading, live streaming, and cancellation for:
+   - `deepseek`
+   - `openai`
+   - `openrouter`
+   - `zai`
 
 Exit criteria:
 
-1. one provider works from browser to upstream with live streaming
+1. the accepted provider set works from browser to upstream with live streaming
 2. BYOK is supported without any server relay
 3. browser cancellation is part of the contract
 
@@ -288,7 +296,7 @@ Exit criteria:
 
 Status:
 
-- in progress
+- completed
 
 Objective:
 
@@ -311,6 +319,28 @@ Exit criteria:
 
 1. browser library can be consumed without relying on the demo app
 2. host-specific integration remains a downstream concern
+
+## Current Closeout
+
+The wasm track is considered complete inside `xrouter` for the current accepted scope.
+
+Frozen scope:
+
+1. supported browser-safe providers:
+   - `deepseek`
+   - `openai`
+   - `openrouter`
+   - `zai`
+2. intentionally unsupported for now:
+   - `yandex`
+   - `gigachat`
+3. downstream host integration remains out of scope for `xrouter`
+
+Future work, if resumed later:
+
+1. add new providers only after real browser CORS and streaming acceptance
+2. evaluate whether npm packaging is worth doing as a first-party deliverable
+3. implement a dedicated browser slice for `gigachat` only if its OAuth flow is worth the cost
 
 ## Phase 6: Demo Frontend
 

@@ -31,6 +31,17 @@ impl BrowserModelDiscoveryClient {
         Ok(map_openrouter_models(payload, supported_ids))
     }
 
+    pub async fn fetch_openrouter_model_ids(
+        &self,
+        base_url: Option<&str>,
+        api_key: Option<&str>,
+    ) -> Result<Vec<String>, BrowserError> {
+        let request = build_openrouter_models_request(base_url, api_key)
+            .ok_or(BrowserError::InvalidRequest("openrouter models request"))?;
+        let payload = fetch_json::<OpenRouterModelsResponse>(&request).await?;
+        Ok(extract_openrouter_model_ids(payload))
+    }
+
     pub async fn fetch_provider_model_ids(
         &self,
         provider_name: &str,
@@ -72,9 +83,13 @@ fn parse_json_body<T: DeserializeOwned>(body: &str) -> Result<T, BrowserError> {
     serde_json::from_str::<T>(body).map_err(|err| BrowserError::Parse(err.to_string()))
 }
 
+fn extract_openrouter_model_ids(payload: OpenRouterModelsResponse) -> Vec<String> {
+    payload.data.into_iter().map(|entry| entry.id).filter(|id| !id.trim().is_empty()).collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use serde_json::Value;
+    use serde_json::{Value, json};
 
     use super::{BrowserError, BrowserModelDiscoveryClient};
 
@@ -94,5 +109,39 @@ mod tests {
     fn parse_json_body_reports_invalid_payload() {
         let result = super::parse_json_body::<Value>("not-json");
         assert!(matches!(result, Err(BrowserError::Parse(_))));
+    }
+
+    #[test]
+    fn extract_openrouter_model_ids_uses_provider_payload() {
+        let payload = super::parse_json_body(json!({
+            "data": [
+                {
+                    "id": "openai/gpt-4.1-mini",
+                    "description": "",
+                    "context_length": 128000,
+                    "architecture": { "modality": "text->text", "tokenizer": null, "instruct_type": null },
+                    "top_provider": {
+                        "context_length": 128000,
+                        "max_completion_tokens": 16384,
+                        "is_moderated": true
+                    }
+                },
+                {
+                    "id": "deepseek/deepseek-chat",
+                    "description": "",
+                    "context_length": 64000,
+                    "architecture": { "modality": "text->text", "tokenizer": null, "instruct_type": null },
+                    "top_provider": {
+                        "context_length": 64000,
+                        "max_completion_tokens": 8192,
+                        "is_moderated": true
+                    }
+                }
+            ]
+        }).to_string().as_str())
+        .expect("openrouter payload should parse");
+
+        let ids = super::extract_openrouter_model_ids(payload);
+        assert_eq!(ids, vec!["openai/gpt-4.1-mini", "deepseek/deepseek-chat"]);
     }
 }

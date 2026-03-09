@@ -75,15 +75,24 @@ impl WasmBrowserClient {
     #[wasm_bindgen(js_name = fetchModelIds)]
     pub async fn fetch_model_ids(&self) -> Result<JsValue, JsValue> {
         let client = BrowserModelDiscoveryClient::new();
-        let model_ids = client
-            .fetch_provider_model_ids(
-                self.provider.as_str(),
-                self.base_url.as_deref(),
-                self.api_key.as_deref(),
-                None,
-            )
-            .await
-            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        let model_ids = match self.provider {
+            BrowserProvider::OpenRouter => {
+                client
+                    .fetch_openrouter_model_ids(self.base_url.as_deref(), self.api_key.as_deref())
+                    .await
+            }
+            _ => {
+                client
+                    .fetch_provider_model_ids(
+                        self.provider.as_str(),
+                        self.base_url.as_deref(),
+                        self.api_key.as_deref(),
+                        None,
+                    )
+                    .await
+            }
+        }
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
         to_value(&model_ids).map_err(|error| JsValue::from_str(&error.to_string()))
     }
 

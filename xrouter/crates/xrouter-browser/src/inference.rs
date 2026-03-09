@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use xrouter_clients_openai::DeepSeekClient;
 use xrouter_clients_openai::runtime::SharedProviderRuntime;
+use xrouter_clients_openai::{DeepSeekClient, OpenAiClient, OpenRouterClient, ZaiClient};
 use xrouter_contracts::ResponsesInput;
 use xrouter_core::{
     CoreError, ProviderClient, ProviderGenerateRequest, ProviderGenerateStreamRequest,
@@ -16,12 +16,18 @@ pub const DEFAULT_DEMO_PROMPT: &str = "Hello, what can you do?";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BrowserProvider {
     DeepSeek,
+    OpenAi,
+    OpenRouter,
+    Zai,
 }
 
 impl BrowserProvider {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::DeepSeek => "deepseek",
+            Self::OpenAi => "openai",
+            Self::OpenRouter => "openrouter",
+            Self::Zai => "zai",
         }
     }
 }
@@ -32,6 +38,9 @@ impl TryFrom<&str> for BrowserProvider {
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value.trim().to_ascii_lowercase().as_str() {
             "deepseek" => Ok(Self::DeepSeek),
+            "openai" => Ok(Self::OpenAi),
+            "openrouter" => Ok(Self::OpenRouter),
+            "zai" => Ok(Self::Zai),
             other => Err(BrowserError::UnsupportedProvider(other.to_string())),
         }
     }
@@ -90,6 +99,24 @@ impl BrowserInferenceClient {
                     .generate_stream(ProviderGenerateStreamRequest { request_id, request, sender })
                     .await
             }
+            BrowserProvider::OpenAi => {
+                let client = OpenAiClient::with_runtime(self.shared_runtime.clone());
+                client
+                    .generate_stream(ProviderGenerateStreamRequest { request_id, request, sender })
+                    .await
+            }
+            BrowserProvider::OpenRouter => {
+                let client = OpenRouterClient::with_runtime(self.shared_runtime.clone());
+                client
+                    .generate_stream(ProviderGenerateStreamRequest { request_id, request, sender })
+                    .await
+            }
+            BrowserProvider::Zai => {
+                let client = ZaiClient::with_runtime(self.shared_runtime.clone());
+                client
+                    .generate_stream(ProviderGenerateStreamRequest { request_id, request, sender })
+                    .await
+            }
         }
     }
 
@@ -111,8 +138,22 @@ mod tests {
 
     #[test]
     fn provider_parser_rejects_unknown_provider() {
-        let result = super::BrowserProvider::try_from("openai");
+        let result = super::BrowserProvider::try_from("yandex");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn provider_parser_accepts_supported_browser_providers() {
+        assert_eq!(
+            super::BrowserProvider::try_from("deepseek").ok(),
+            Some(BrowserProvider::DeepSeek)
+        );
+        assert_eq!(super::BrowserProvider::try_from("openai").ok(), Some(BrowserProvider::OpenAi));
+        assert_eq!(
+            super::BrowserProvider::try_from("openrouter").ok(),
+            Some(BrowserProvider::OpenRouter)
+        );
+        assert_eq!(super::BrowserProvider::try_from("zai").ok(), Some(BrowserProvider::Zai));
     }
 
     #[test]

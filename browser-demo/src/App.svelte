@@ -11,6 +11,9 @@
 
   const providerOptions: Array<{ value: DemoProvider; label: string }> = [
     { value: 'deepseek', label: 'DeepSeek' },
+    { value: 'openai', label: 'OpenAI' },
+    { value: 'openrouter', label: 'OpenRouter' },
+    { value: 'zai', label: 'ZAI' },
   ];
 
   let provider: DemoProvider = 'deepseek';
@@ -37,6 +40,7 @@
   function onProviderChange(nextProvider: DemoProvider): void {
     provider = nextProvider;
     baseUrl = defaultBaseUrl(provider);
+    apiKey = '';
     models = [];
     selectedModel = '';
     resetStreamState();
@@ -63,7 +67,9 @@
         baseUrl: baseUrl.trim() || undefined,
       });
       activeClient = client;
-      models = await client.fetchModelIds();
+      models = (await client.fetchModelIds())
+        .slice()
+        .sort((left: string, right: string) => left.localeCompare(right));
       selectedModel = models[0] ?? '';
       status = 'ready';
       if (models.length === 0) {
@@ -163,7 +169,8 @@
     <h1>Bring your key, fetch the provider models, stream the answer in-browser.</h1>
     <p class="lede">
       This demo runs the router path in the browser. No server layer. The first vertical slice is
-      intentionally narrow and wired for DeepSeek.
+      wired for BYOK providers: DeepSeek, OpenAI, OpenRouter, and ZAI. Yandex and GigaChat are
+      intentionally excluded from the wasm slice for now.
     </p>
   </section>
 

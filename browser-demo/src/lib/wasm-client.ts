@@ -1,6 +1,6 @@
 import initWasm, { WasmBrowserClient } from './wasm/xrouter_browser.js';
 
-export type DemoProvider = 'deepseek';
+export type DemoProvider = 'deepseek' | 'openai' | 'openrouter' | 'zai';
 
 export interface DemoClientConfig {
   provider: DemoProvider;
@@ -54,6 +54,12 @@ export function defaultBaseUrl(provider: DemoProvider): string {
   switch (provider) {
     case 'deepseek':
       return 'https://api.deepseek.com';
+    case 'openai':
+      return 'https://api.openai.com/v1';
+    case 'openrouter':
+      return 'https://openrouter.ai/api/v1';
+    case 'zai':
+      return 'https://api.z.ai/api/paas/v4';
   }
 }
 

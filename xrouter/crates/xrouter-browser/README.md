@@ -26,11 +26,25 @@ It provides:
 
 ## Current Supported Provider
 
-Current first supported browser provider:
+Current browser-supported providers:
 
 1. `deepseek`
+2. `openai`
+3. `openrouter`
+4. `zai`
 
-This is the only provider that should be treated as part of the current stable acceptance slice.
+These providers were manually validated in the browser for:
+
+1. model discovery
+2. streamed inference
+3. request-scoped cancellation
+
+Currently unsupported in wasm:
+
+1. `yandex`
+   requires extra project/folder configuration beyond simple API key BYOK
+2. `gigachat`
+   requires an additional OAuth/token flow that is intentionally excluded for now
 
 ## Rust API
 
