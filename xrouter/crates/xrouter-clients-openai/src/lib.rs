@@ -1,4 +1,5 @@
 mod clients;
+pub mod models;
 pub mod parser;
 pub mod protocol;
 pub mod runtime;

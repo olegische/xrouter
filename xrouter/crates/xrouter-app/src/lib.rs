@@ -18,11 +18,12 @@ mod tests {
     use serde_json::{Map, Value, json};
     use tower::ServiceExt;
 
-    use crate::startup::model_catalog::{
-        OpenRouterModelsResponse, XrouterProviderModelsResponse, build_models_from_registry,
-        fetch_openrouter_models, map_openrouter_models, map_xrouter_models,
-    };
+    use crate::startup::model_catalog_remote::fetch_openrouter_models;
     use crate::{AppBuilder, AppState, build_router, http::errors::error_response};
+    use xrouter_clients_openai::models::{
+        OpenRouterModelsResponse, XrouterProviderModelsResponse, build_models_from_registry,
+        map_openrouter_models, map_xrouter_models,
+    };
     use xrouter_core::CoreError;
 
     #[derive(Debug)]

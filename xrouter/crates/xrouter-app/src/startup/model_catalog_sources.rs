@@ -1,13 +1,13 @@
 use std::collections::HashSet;
 
 use tracing::{info, warn};
+use xrouter_clients_openai::models::{build_models_from_registry, fallback_openrouter_models};
 use xrouter_core::ModelDescriptor;
 
 use crate::{
     config,
     startup::model_catalog_remote::{
-        build_models_from_registry, fallback_openrouter_models, fetch_openrouter_models,
-        fetch_provider_model_ids, fetch_xrouter_models,
+        fetch_openrouter_models, fetch_provider_model_ids, fetch_xrouter_models,
     },
 };
 

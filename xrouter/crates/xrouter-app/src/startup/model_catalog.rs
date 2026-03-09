@@ -4,11 +4,6 @@ use tracing::{debug, info};
 use xrouter_core::{ModelDescriptor, default_model_catalog};
 
 use crate::config;
-#[cfg(test)]
-pub(crate) use crate::startup::model_catalog_remote::{
-    OpenRouterModelsResponse, XrouterProviderModelsResponse, build_models_from_registry,
-    fetch_openrouter_models, map_openrouter_models, map_xrouter_models,
-};
 use crate::startup::model_catalog_sources::{
     BaseCatalogSource, GigachatCatalogSource, ModelCatalogContext, ModelCatalogSource,
     OpenRouterCatalogSource, RegistryBackedCatalogSource, XrouterCatalogSource,
