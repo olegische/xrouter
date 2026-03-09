@@ -1,0 +1,95 @@
+name: xrouter-browser-release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: xrouter-browser-release
+  cancel-in-progress: true
+
+jobs:
+  build-and-release:
+    name: Build and publish xrouter-browser
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            xrouter -> target
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      - name: Build xrouter-browser
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cd xrouter/crates/xrouter-browser
+          wasm-pack build --target web --release --out-dir ../../../dist/xrouter-browser
+
+      - name: Package release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -C dist -czf dist/xrouter-browser-main.tar.gz xrouter-browser
+          sha256sum dist/xrouter-browser-main.tar.gz > dist/xrouter-browser-main.tar.gz.sha256
+          cat > dist/xrouter-browser-release.txt <<EOF
+          xrouter-browser rolling main build
+          commit=${GITHUB_SHA}
+          ref=${GITHUB_REF_NAME}
+          run_id=${GITHUB_RUN_ID}
+          artifact=xrouter-browser-main.tar.gz
+          EOF
+
+      - name: Move rolling release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f xrouter-browser-main "${GITHUB_SHA}"
+          git push origin refs/tags/xrouter-browser-main --force
+
+      - name: Write release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<EOF
+          Automated rolling browser/WASM build for \`xrouter-browser\`.
+
+          - branch: \`${GITHUB_REF_NAME}\`
+          - commit: \`${GITHUB_SHA}\`
+          - artifact: \`xrouter-browser-main.tar.gz\`
+
+          This release is updated on every push to \`main\`.
+          EOF
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: xrouter-browser-main
+          name: xrouter-browser main
+          prerelease: true
+          body_path: release-notes.md
+          overwrite_files: true
+          files: |
+            dist/xrouter-browser-main.tar.gz
+            dist/xrouter-browser-main.tar.gz.sha256
+            dist/xrouter-browser-release.txt
