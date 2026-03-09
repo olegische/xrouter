@@ -31,6 +31,7 @@ The broader architectural target behind that demo is:
 1. browser build has zero dependency on server-only crates
 2. shared logic is reused through portable crates
 3. browser-needed logic currently trapped in `xrouter-app` is extracted, not imported directly
+4. the Rust browser crate and the demo frontend app are built as separate deliverables
 
 ## Current Starting Point
 
@@ -48,7 +49,8 @@ Main gaps still visible from the codebase:
 2. browser model discovery does not exist yet
 3. `xrouter-app` currently owns startup model catalog assembly
 4. no dedicated browser crate exists yet
-5. extraction targets inside `xrouter-app` are only partially mapped
+5. no separate frontend demo app exists yet
+6. extraction targets inside `xrouter-app` are only partially mapped
 
 ## Current Status
 
@@ -73,6 +75,7 @@ Current active focus:
 
 1. browser model discovery extraction from `xrouter-app/startup`
 2. browser-facing runtime implementation on top of the completed transport boundary
+3. preserving a clean split between the future Rust browser crate and the future demo frontend app
 
 ## Phase 0: Track Setup
 
@@ -279,6 +282,7 @@ Why not `xrouter/wasm` as a crate:
 
 1. `xrouter/wasm` is the track/document area
 2. code crates should continue to live under `xrouter/crates/` with the rest of the workspace
+3. frontend app code should also stay separate from the Rust crate
 
 Note:
 
@@ -293,6 +297,7 @@ Work:
    - configure provider/auth
    - fetch models
    - run one streamed request
+4. do not mix Vite/Svelte/TypeScript app code into this crate
 
 Exit criteria:
 
@@ -300,6 +305,7 @@ Exit criteria:
 2. browser support has a clear workspace home
 3. crate API is small enough that UI code does not rebuild transport/provider logic
 4. browser crate depends only on portable/shared crates plus browser-specific adapters
+5. the browser crate is cleanly separated from the frontend demo app
 
 ## Phase 6: Demo UI Integration
 
@@ -309,7 +315,13 @@ Status:
 
 Objective:
 
-Wire the browser crate into a minimal demo UI.
+Wire the Rust browser crate into a separate minimal demo UI app.
+
+Suggested location:
+
+1. `xrouter/browser-demo`
+   or
+2. `xrouter/demo/browser`
 
 Work:
 
@@ -323,12 +335,17 @@ Work:
    - invalid key
    - model fetch failure
    - stream/inference failure
+8. keep frontend tooling isolated from Rust workspace crate logic:
+   - Vite
+   - Svelte
+   - TypeScript
 
 Exit criteria:
 
 1. a user can complete the demo flow manually in the browser
 2. stream output is visible incrementally
 3. failure states are observable and debuggable
+4. frontend demo app remains separate from the Rust browser crate
 
 ## Phase 7: Expand Provider Support
 

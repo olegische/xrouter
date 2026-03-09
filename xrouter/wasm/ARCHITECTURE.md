@@ -187,6 +187,19 @@ If a real Rust crate is introduced, it should still live under `xrouter/crates/`
 1. `xrouter/crates/xrouter-browser`
 2. or `xrouter/crates/xrouter-wasm`
 
+The browser demo frontend should be a separate app, not part of the Rust crate itself.
+
+Preferred split:
+
+1. Rust/WASM browser crate under `xrouter/crates/`
+2. separate Vite/Svelte/TypeScript demo app outside the Rust crate
+
+This means:
+
+1. the Rust crate owns browser-safe execution logic, wasm exports, and runtime adapters
+2. the demo app owns UI, frontend tooling, and browser-dev workflow
+3. `xrouter/wasm` remains a planning area, not a production code location for either layer
+
 ## Required Runtime Boundaries
 
 ### Core vs Browser Transport
@@ -296,6 +309,26 @@ The UI should own:
 3. prompt submission
 4. live rendering of normalized stream events
 
+### Rust Browser Crate vs Demo Frontend
+
+These are separate deliverables.
+
+The Rust browser crate should own:
+
+1. wasm exports
+2. browser runtime adapters
+3. model discovery execution
+4. streamed inference execution
+
+The demo frontend app should own:
+
+1. Vite configuration
+2. Svelte components
+3. TypeScript UI glue
+4. demo-only presentation behavior
+
+Do not collapse these into one mixed directory just because both are browser-facing.
+
 ### Portability Is Achieved by Extraction
 
 If logic currently lives in `xrouter-app` but is needed by both products, the fix is:
@@ -320,6 +353,7 @@ The fix is not:
 7. the first browser demo must prove real streaming, not buffered fake streaming after completion.
 8. the final architecture must support two products built from one portable core.
 9. browser build must have zero dependency on server-only crates.
+10. the Rust browser crate and the demo frontend app remain separate layers.
 
 ## Known Gaps
 
