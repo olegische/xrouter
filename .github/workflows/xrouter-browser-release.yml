@@ -1,9 +1,11 @@
 name: xrouter-browser-release
 
 on:
-  push:
-    branches:
-      - main
+  workflow_run:
+    workflows:
+      - rust-ci
+    types:
+      - completed
   workflow_dispatch:
 
 concurrency:
@@ -14,12 +16,19 @@ jobs:
   build-and-release:
     name: Build and publish xrouter-browser
     runs-on: ubuntu-24.04
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
     permissions:
       contents: write
 
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@stable
@@ -52,8 +61,8 @@ jobs:
           sha256sum dist/xrouter-browser-main.tar.gz > dist/xrouter-browser-main.tar.gz.sha256
           cat > dist/xrouter-browser-release.txt <<EOF
           xrouter-browser rolling main build
-          commit=${GITHUB_SHA}
-          ref=${GITHUB_REF_NAME}
+          commit=${{ github.event.workflow_run.head_sha || github.sha }}
+          ref=${{ github.event.workflow_run.head_branch || github.ref_name }}
           run_id=${GITHUB_RUN_ID}
           artifact=xrouter-browser-main.tar.gz
           EOF
@@ -64,7 +73,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -f xrouter-browser-main "${GITHUB_SHA}"
+          git tag -f xrouter-browser-main "${{ github.event.workflow_run.head_sha || github.sha }}"
           git push origin refs/tags/xrouter-browser-main --force
 
       - name: Write release notes
@@ -74,11 +83,11 @@ jobs:
           cat > release-notes.md <<EOF
           Automated rolling browser/WASM build for \`xrouter-browser\`.
 
-          - branch: \`${GITHUB_REF_NAME}\`
-          - commit: \`${GITHUB_SHA}\`
+          - branch: \`${{ github.event.workflow_run.head_branch || github.ref_name }}\`
+          - commit: \`${{ github.event.workflow_run.head_sha || github.sha }}\`
           - artifact: \`xrouter-browser-main.tar.gz\`
 
-          This release is updated on every push to \`main\`.
+          This release is updated after successful \`rust-ci\` runs on \`main\`.
           EOF
 
       - name: Publish GitHub Release
