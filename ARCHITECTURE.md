@@ -232,4 +232,4 @@ Near-term work should mostly be:
 3. keeping composition explicit
 4. keeping provider logic separate from transport and route adaptation
 
-WASM-specific architecture is tracked separately under `xrouter/docs/wasm/`.
+WASM-specific architecture is tracked separately under `xrouter/wasm/`.
