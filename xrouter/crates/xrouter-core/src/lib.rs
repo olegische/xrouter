@@ -666,9 +666,16 @@ impl ExecutionEngine {
         auth_bearer: Option<String>,
         sender: Arc<dyn ResponseEventSink>,
     ) -> Result<(), CoreError> {
+        let execute_stream_span = info_span!(
+            "execute_stream",
+            otel.kind = "internal",
+            openinference.span.kind = "CHAIN",
+            model = %request.model,
+            stream = true
+        );
         let result = self
             .execute_internal(request, disconnect_at, Some(sender.clone()), auth_bearer)
-            .instrument(info_span!("execute_stream"))
+            .instrument(execute_stream_span)
             .await;
         if let Err(error) = &result {
             sender
