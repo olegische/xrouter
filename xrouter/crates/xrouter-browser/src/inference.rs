@@ -2,10 +2,11 @@ use std::sync::Arc;
 
 use xrouter_clients_openai::runtime::SharedProviderRuntime;
 use xrouter_clients_openai::{DeepSeekClient, OpenAiClient, OpenRouterClient, ZaiClient};
-use xrouter_contracts::ResponsesInput;
+use xrouter_contracts::{ResponseEvent, ResponsesInput, ResponsesRequest, ResponsesResponse};
 use xrouter_core::{
     CoreError, ProviderClient, ProviderGenerateRequest, ProviderGenerateStreamRequest,
-    ProviderOutcome, ResponseEventSink,
+    ProviderOutcome, ResponseEventSink, response_completed_event_from_outcome,
+    responses_response_from_outcome,
 };
 
 use crate::error::BrowserError;
@@ -83,39 +84,101 @@ impl BrowserInferenceClient {
         input: &str,
         sender: Option<&dyn ResponseEventSink>,
     ) -> Result<ProviderOutcome, CoreError> {
-        let input = ResponsesInput::Text(input.to_string());
-        let request = ProviderGenerateRequest {
-            model,
-            input: &input,
+        let request = ResponsesRequest {
+            model: model.to_string(),
+            input: ResponsesInput::Text(input.to_string()),
+            stream: true,
             reasoning: None,
             tools: None,
             tool_choice: None,
-            auth_bearer: None,
         };
+        let (outcome, _) =
+            self.generate_responses_with_outcome(request_id, &request, sender).await?;
+        Ok(outcome)
+    }
+
+    pub async fn generate_responses(
+        &self,
+        request_id: &str,
+        request: &ResponsesRequest,
+    ) -> Result<ResponsesResponse, CoreError> {
+        self.generate_responses_stream(request_id, request, None).await
+    }
+
+    pub async fn generate_responses_stream(
+        &self,
+        request_id: &str,
+        request: &ResponsesRequest,
+        sender: Option<&dyn ResponseEventSink>,
+    ) -> Result<ResponsesResponse, CoreError> {
+        let (_, response) =
+            self.generate_responses_with_outcome(request_id, request, sender).await?;
+        Ok(response)
+    }
+
+    async fn generate_responses_with_outcome(
+        &self,
+        request_id: &str,
+        request: &ResponsesRequest,
+        sender: Option<&dyn ResponseEventSink>,
+    ) -> Result<(ProviderOutcome, ResponsesResponse), CoreError> {
+        let provider_request = build_provider_request(request);
         match self.provider {
             BrowserProvider::DeepSeek => {
                 let client = DeepSeekClient::with_runtime(self.shared_runtime.clone());
-                client
-                    .generate_stream(ProviderGenerateStreamRequest { request_id, request, sender })
-                    .await
+                finalize_stream_request(
+                    request_id,
+                    request,
+                    sender,
+                    client.generate_stream(ProviderGenerateStreamRequest {
+                        request_id,
+                        request: provider_request,
+                        sender,
+                    }),
+                )
+                .await
             }
             BrowserProvider::OpenAi => {
                 let client = OpenAiClient::with_runtime(self.shared_runtime.clone());
-                client
-                    .generate_stream(ProviderGenerateStreamRequest { request_id, request, sender })
-                    .await
+                finalize_stream_request(
+                    request_id,
+                    request,
+                    sender,
+                    client.generate_stream(ProviderGenerateStreamRequest {
+                        request_id,
+                        request: provider_request,
+                        sender,
+                    }),
+                )
+                .await
             }
             BrowserProvider::OpenRouter => {
                 let client = OpenRouterClient::with_runtime(self.shared_runtime.clone());
-                client
-                    .generate_stream(ProviderGenerateStreamRequest { request_id, request, sender })
-                    .await
+                finalize_stream_request(
+                    request_id,
+                    request,
+                    sender,
+                    client.generate_stream(ProviderGenerateStreamRequest {
+                        request_id,
+                        request: provider_request,
+                        sender,
+                    }),
+                )
+                .await
             }
             BrowserProvider::Zai => {
                 let client = ZaiClient::with_runtime(self.shared_runtime.clone());
-                client
-                    .generate_stream(ProviderGenerateStreamRequest { request_id, request, sender })
-                    .await
+                finalize_stream_request(
+                    request_id,
+                    request,
+                    sender,
+                    client.generate_stream(ProviderGenerateStreamRequest {
+                        request_id,
+                        request: provider_request,
+                        sender,
+                    }),
+                )
+                .await
             }
         }
     }
@@ -130,11 +193,99 @@ impl BrowserInferenceClient {
     }
 }
 
+fn build_provider_request<'a>(request: &'a ResponsesRequest) -> ProviderGenerateRequest<'a> {
+    ProviderGenerateRequest {
+        model: &request.model,
+        input: &request.input,
+        reasoning: request.reasoning.as_ref(),
+        tools: request.tools.as_deref(),
+        tool_choice: request.tool_choice.as_ref(),
+        auth_bearer: None,
+    }
+}
+
+async fn finalize_stream_request(
+    request_id: &str,
+    request: &ResponsesRequest,
+    sender: Option<&dyn ResponseEventSink>,
+    future: impl std::future::Future<Output = Result<ProviderOutcome, CoreError>>,
+) -> Result<(ProviderOutcome, ResponsesResponse), CoreError> {
+    let outcome = match future.await {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            if let Some(tx) = sender {
+                tx.send(Err(error.clone())).await;
+            }
+            return Err(error);
+        }
+    };
+
+    emit_non_live_events(request_id, &outcome, sender).await;
+
+    let input_tokens = request.input.to_canonical_text().split_whitespace().count() as u32;
+    let response = responses_response_from_outcome(request_id, input_tokens, &outcome);
+    if let Some(tx) = sender {
+        tx.send(Ok(response_completed_event_from_outcome(request_id, input_tokens, &outcome)))
+            .await;
+    }
+
+    Ok((outcome, response))
+}
+
+async fn emit_non_live_events(
+    request_id: &str,
+    outcome: &ProviderOutcome,
+    sender: Option<&dyn ResponseEventSink>,
+) {
+    if outcome.emitted_live {
+        return;
+    }
+    let Some(tx) = sender else {
+        return;
+    };
+
+    if let Some(reasoning) = outcome.reasoning.as_ref().filter(|value| !value.trim().is_empty()) {
+        tx.send(Ok(ResponseEvent::ReasoningDelta {
+            id: request_id.to_string(),
+            delta: reasoning.clone(),
+        }))
+        .await;
+    }
+
+    for chunk in &outcome.chunks {
+        tx.send(Ok(ResponseEvent::OutputTextDelta {
+            id: request_id.to_string(),
+            delta: chunk.clone(),
+        }))
+        .await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use xrouter_core::CoreError;
+    use std::sync::Mutex;
 
-    use super::{BrowserInferenceClient, BrowserProvider, DEFAULT_DEMO_PROMPT};
+    use async_trait::async_trait;
+    use serde_json::json;
+    use xrouter_contracts::{ReasoningConfig, ResponseEvent};
+    use xrouter_core::{CoreError, responses_response_from_outcome};
+
+    use super::{
+        BrowserInferenceClient, BrowserProvider, DEFAULT_DEMO_PROMPT, build_provider_request,
+        emit_non_live_events,
+    };
+
+    #[derive(Default)]
+    struct RecordingSink {
+        events: Mutex<Vec<Result<ResponseEvent, CoreError>>>,
+    }
+
+    #[async_trait]
+    impl xrouter_core::ResponseEventSink for RecordingSink {
+        async fn send(&self, event: Result<ResponseEvent, CoreError>) {
+            self.events.lock().expect("lock").push(event);
+        }
+    }
 
     #[test]
     fn provider_parser_rejects_unknown_provider() {
@@ -184,5 +335,108 @@ mod tests {
             Some("test".to_string()),
         );
         client.cancel("request-1").expect("cancel should be idempotent");
+    }
+
+    #[test]
+    fn provider_request_preserves_tooling_fields() {
+        let request = xrouter_contracts::ResponsesRequest {
+            model: "gpt-4.1-mini".to_string(),
+            input: xrouter_contracts::ResponsesInput::Items(vec![
+                xrouter_contracts::ResponseInputItem {
+                    kind: Some("message".to_string()),
+                    role: Some("user".to_string()),
+                    content: None,
+                    text: Some("hello".to_string()),
+                    output: None,
+                    call_id: None,
+                    name: None,
+                    arguments: None,
+                    extra: Default::default(),
+                },
+            ]),
+            stream: true,
+            reasoning: Some(ReasoningConfig { effort: Some("high".to_string()) }),
+            tools: Some(vec![json!({
+                "type": "function",
+                "function": {
+                    "name": "lookup_weather",
+                    "parameters": {"type": "object"}
+                }
+            })]),
+            tool_choice: Some(json!("auto")),
+        };
+
+        let provider_request = build_provider_request(&request);
+        assert_eq!(provider_request.tools.expect("tools")[0]["function"]["name"], "lookup_weather");
+        assert_eq!(provider_request.tool_choice.expect("tool choice"), &json!("auto"));
+        assert_eq!(provider_request.reasoning.expect("reasoning").effort.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn completed_response_includes_function_calls() {
+        let request = xrouter_contracts::ResponsesRequest {
+            model: "gpt-4.1-mini".to_string(),
+            input: xrouter_contracts::ResponsesInput::Text("call the tool".to_string()),
+            stream: true,
+            reasoning: None,
+            tools: None,
+            tool_choice: None,
+        };
+        let outcome = xrouter_core::ProviderOutcome {
+            chunks: Vec::new(),
+            output_tokens: 7,
+            reasoning: None,
+            reasoning_details: None,
+            tool_calls: Some(vec![xrouter_contracts::ToolCall {
+                id: "call_123".to_string(),
+                kind: "function".to_string(),
+                function: xrouter_contracts::ToolFunction {
+                    name: "lookup_weather".to_string(),
+                    arguments: "{\"city\":\"Moscow\"}".to_string(),
+                },
+            }]),
+            emitted_live: true,
+        };
+
+        let response = responses_response_from_outcome(
+            "req-1",
+            request.input.to_canonical_text().split_whitespace().count() as u32,
+            &outcome,
+        );
+        assert_eq!(response.finish_reason, "tool_calls");
+        assert!(response.output.iter().any(|item| matches!(
+            item,
+            xrouter_contracts::ResponseOutputItem::FunctionCall { call_id, name, .. }
+            if call_id == "call_123" && name == "lookup_weather"
+        )));
+    }
+
+    #[test]
+    fn non_live_outcome_replays_deltas_to_sink() {
+        let sink = RecordingSink::default();
+        let outcome = xrouter_core::ProviderOutcome {
+            chunks: vec!["hello ".to_string(), "world".to_string()],
+            output_tokens: 2,
+            reasoning: Some("thinking".to_string()),
+            reasoning_details: None,
+            tool_calls: None,
+            emitted_live: false,
+        };
+
+        futures::executor::block_on(emit_non_live_events("req-1", &outcome, Some(&sink)));
+
+        let events = sink.events.lock().expect("lock");
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Ok(ResponseEvent::ReasoningDelta { delta, .. }) if delta == "thinking"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Ok(ResponseEvent::OutputTextDelta { delta, .. }) if delta == "hello "
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Ok(ResponseEvent::OutputTextDelta { delta, .. }) if delta == "world"
+        )));
     }
 }

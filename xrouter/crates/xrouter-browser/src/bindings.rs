@@ -1,10 +1,10 @@
 use async_trait::async_trait;
 use js_sys::Function;
 use serde::Serialize;
-use serde_wasm_bindgen::to_value;
+use serde_wasm_bindgen::{from_value, to_value};
 use wasm_bindgen::JsValue;
 use wasm_bindgen::prelude::wasm_bindgen;
-use xrouter_contracts::ResponseEvent;
+use xrouter_contracts::{ResponseEvent, ResponsesRequest};
 use xrouter_core::{CoreError, ResponseEventSink};
 
 use crate::{
@@ -128,6 +128,24 @@ impl WasmBrowserClient {
             emitted_live: outcome.emitted_live,
         };
         to_value(&result).map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
+    #[wasm_bindgen(js_name = runResponsesStream)]
+    pub async fn run_responses_stream(
+        &self,
+        request_id: String,
+        request: JsValue,
+        on_event: Function,
+    ) -> Result<JsValue, JsValue> {
+        let request: ResponsesRequest =
+            from_value(request).map_err(|error| JsValue::from_str(&error.to_string()))?;
+        let sink = JsCallbackSink::new(request_id.clone(), on_event);
+        let response = self
+            .inference
+            .generate_responses_stream(&request_id, &request, Some(&sink))
+            .await
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        to_value(&response).map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
     #[wasm_bindgen]

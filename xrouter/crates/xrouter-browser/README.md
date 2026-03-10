@@ -73,10 +73,26 @@ Current methods:
 
 1. `fetchModelIds()`
 2. `runTextStream(requestId, model, input, onEvent)`
-3. `runDemoPromptStream(requestId, model, onEvent)`
-4. `cancel(requestId)`
+3. `runResponsesStream(requestId, request, onEvent)`
+4. `runDemoPromptStream(requestId, model, onEvent)`
+5. `cancel(requestId)`
 
 Current event callback payloads are serialized `ResponseEvent` values from `xrouter-contracts`.
+
+`runResponsesStream(...)` is the canonical browser entrypoint for OpenAI Responses-compatible
+agent flows. It accepts a serialized `ResponsesRequest`, including:
+
+1. structured `input`
+2. `tools`
+3. `tool_choice`
+4. optional `reasoning`
+
+Event behavior:
+
+1. live text and reasoning deltas are forwarded as `ResponseEvent`
+2. terminal completion is always emitted as `ResponseCompleted`
+3. tool-calling responses are surfaced through `ResponseCompleted.output` function-call items
+4. provider/request failures are surfaced as `ResponseError`
 
 ## Cancellation Semantics
 
@@ -113,3 +129,46 @@ Current recommended packaging strategy:
 3. consume the generated wasm/js package from the host application
 
 This keeps the contract neutral for downstream browser hosts.
+
+For consumers that want a ready-built browser package, use the rolling release asset:
+
+1. release page:
+   `https://github.com/olegische/xrouter/releases/tag/xrouter-browser-main`
+2. direct package download:
+   `https://github.com/olegische/xrouter/releases/download/xrouter-browser-main/xrouter-browser-main.tar.gz`
+3. checksum:
+   `https://github.com/olegische/xrouter/releases/download/xrouter-browser-main/xrouter-browser-main.tar.gz.sha256`
+
+Do not use:
+
+1. `Source code (zip)`
+2. `Source code (tar.gz)`
+
+Those GitHub-generated source archives contain repository sources, not the built browser/WASM package.
+
+After unpacking `xrouter-browser-main.tar.gz`, the host application should serve the unpacked
+`xrouter-browser/` directory as static assets and import the generated JS glue module. The
+generated `xrouter_browser.js` and `xrouter_browser_bg.wasm` files must stay together.
+
+Minimal browser runtime flow:
+
+```ts
+import initXrouterBrowser, { WasmBrowserClient } from "/assets/xrouter-browser/xrouter_browser.js";
+
+await initXrouterBrowser();
+
+const client = new WasmBrowserClient(
+  "deepseek",
+  "https://api.deepseek.com",
+  apiKey,
+);
+
+const modelIds = await client.fetchModelIds();
+```
+
+Runtime notes:
+
+1. initialize the wasm module before calling `new WasmBrowserClient(...)`
+2. load it as an ESM module in the browser
+3. if the page already hosts another `wasm-bindgen` runtime, align `wasm-bindgen`,
+   `wasm-bindgen-futures`, `js-sys`, and `web-sys` versions across modules

@@ -640,6 +640,47 @@ fn build_output_items(
     output
 }
 
+pub fn responses_response_from_outcome(
+    response_id: &str,
+    input_tokens: u32,
+    outcome: &ProviderOutcome,
+) -> ResponsesResponse {
+    let finish_reason =
+        if outcome.tool_calls.is_some() { "tool_calls".to_string() } else { "stop".to_string() };
+    ResponsesResponse {
+        id: response_id.to_string(),
+        object: "response".to_string(),
+        status: "completed".to_string(),
+        output: build_output_items(
+            response_id,
+            &outcome.chunks.join(""),
+            outcome.reasoning.clone(),
+            outcome.reasoning_details.clone(),
+            outcome.tool_calls.clone(),
+        ),
+        finish_reason,
+        usage: Usage {
+            input_tokens,
+            output_tokens: outcome.output_tokens,
+            total_tokens: input_tokens + outcome.output_tokens,
+        },
+    }
+}
+
+pub fn response_completed_event_from_outcome(
+    response_id: &str,
+    input_tokens: u32,
+    outcome: &ProviderOutcome,
+) -> ResponseEvent {
+    let response = responses_response_from_outcome(response_id, input_tokens, outcome);
+    ResponseEvent::ResponseCompleted {
+        id: response.id,
+        output: response.output,
+        finish_reason: response.finish_reason,
+        usage: response.usage,
+    }
+}
+
 impl ExecutionEngine {
     pub fn new(provider: Arc<dyn ProviderClient>) -> Self {
         Self { provider }
@@ -769,42 +810,30 @@ impl ExecutionEngine {
         let tool_calls = context.tool_calls.clone().or_else(|| {
             parse_tool_call(&context.output_text, &context.request_id).map(|call| vec![call])
         });
-        let finish_reason =
-            if tool_calls.is_some() { "tool_calls".to_string() } else { "stop".to_string() };
-        let output = build_output_items(
-            &context.request_id,
-            &context.output_text,
-            context.reasoning.clone(),
-            context.reasoning_details.clone(),
-            tool_calls.clone(),
-        );
+        let terminal_outcome = ProviderOutcome {
+            chunks: vec![context.output_text.clone()],
+            output_tokens: context.output_tokens,
+            reasoning: context.reasoning.clone(),
+            reasoning_details: context.reasoning_details.clone(),
+            tool_calls: tool_calls.clone(),
+            emitted_live: true,
+        };
 
         if let Some(tx) = sender {
-            tx.send(Ok(ResponseEvent::ResponseCompleted {
-                id: context.request_id.clone(),
-                output: output.clone(),
-                finish_reason: finish_reason.clone(),
-                usage: Usage {
-                    input_tokens: context.input_tokens,
-                    output_tokens: context.output_tokens,
-                    total_tokens: context.input_tokens + context.output_tokens,
-                },
-            }))
+            tx.send(Ok(response_completed_event_from_outcome(
+                &context.request_id,
+                context.input_tokens,
+                &terminal_outcome,
+            )))
             .await;
         }
 
-        let response = ResponsesResponse {
-            id: context.request_id,
-            object: "response".to_string(),
-            status: "completed".to_string(),
-            output,
-            finish_reason: finish_reason.clone(),
-            usage: Usage {
-                input_tokens: context.input_tokens,
-                output_tokens: context.output_tokens,
-                total_tokens: context.input_tokens + context.output_tokens,
-            },
-        };
+        let response = responses_response_from_outcome(
+            &context.request_id,
+            context.input_tokens,
+            &terminal_outcome,
+        );
+        let finish_reason = response.finish_reason.clone();
         info!(
             event = "core.request.completed",
             request_id = %response.id,
@@ -1317,5 +1346,33 @@ usage_total=3
             !events.iter().any(|event| matches!(event, Err(CoreError::ClientDisconnected(_)))),
             "generate disconnect must not surface as stream error"
         );
+    }
+
+    #[test]
+    fn responses_response_from_outcome_preserves_function_calls() {
+        let outcome = ProviderOutcome {
+            chunks: vec![String::new()],
+            output_tokens: 3,
+            reasoning: None,
+            reasoning_details: None,
+            tool_calls: Some(vec![ToolCall {
+                id: "call_123".to_string(),
+                kind: "function".to_string(),
+                function: ToolFunction {
+                    name: "lookup_weather".to_string(),
+                    arguments: "{\"city\":\"Moscow\"}".to_string(),
+                },
+            }]),
+            emitted_live: true,
+        };
+
+        let response = responses_response_from_outcome("resp_1", 5, &outcome);
+        assert_eq!(response.finish_reason, "tool_calls");
+        assert!(response.output.iter().any(|item| matches!(
+            item,
+            ResponseOutputItem::FunctionCall { call_id, name, .. }
+            if call_id == "call_123" && name == "lookup_weather"
+        )));
+        assert_eq!(response.usage.total_tokens, 8);
     }
 }
