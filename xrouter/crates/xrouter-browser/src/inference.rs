@@ -86,9 +86,17 @@ impl BrowserInferenceClient {
     ) -> Result<ProviderOutcome, CoreError> {
         let request = ResponsesRequest {
             model: model.to_string(),
+            instructions: None,
+            previous_response_id: None,
             input: ResponsesInput::Text(input.to_string()),
+            parallel_tool_calls: None,
             stream: true,
             reasoning: None,
+            store: None,
+            include: None,
+            service_tier: None,
+            prompt_cache_key: None,
+            text: None,
             tools: None,
             tool_choice: None,
         };
@@ -196,6 +204,7 @@ impl BrowserInferenceClient {
 fn build_provider_request<'a>(request: &'a ResponsesRequest) -> ProviderGenerateRequest<'a> {
     ProviderGenerateRequest {
         model: &request.model,
+        instructions: request.instructions.as_deref(),
         input: &request.input,
         reasoning: request.reasoning.as_ref(),
         tools: request.tools.as_deref(),
@@ -341,21 +350,24 @@ mod tests {
     fn provider_request_preserves_tooling_fields() {
         let request = xrouter_contracts::ResponsesRequest {
             model: "gpt-4.1-mini".to_string(),
+            instructions: Some("be precise".to_string()),
+            previous_response_id: None,
             input: xrouter_contracts::ResponsesInput::Items(vec![
                 xrouter_contracts::ResponseInputItem {
                     kind: Some("message".to_string()),
                     role: Some("user".to_string()),
-                    content: None,
                     text: Some("hello".to_string()),
-                    output: None,
-                    call_id: None,
-                    name: None,
-                    arguments: None,
-                    extra: Default::default(),
+                    ..Default::default()
                 },
             ]),
+            parallel_tool_calls: None,
             stream: true,
-            reasoning: Some(ReasoningConfig { effort: Some("high".to_string()) }),
+            reasoning: Some(ReasoningConfig { effort: Some("high".to_string()), summary: None }),
+            store: None,
+            include: None,
+            service_tier: None,
+            prompt_cache_key: None,
+            text: None,
             tools: Some(vec![json!({
                 "type": "function",
                 "function": {
@@ -367,6 +379,7 @@ mod tests {
         };
 
         let provider_request = build_provider_request(&request);
+        assert_eq!(provider_request.instructions, Some("be precise"));
         assert_eq!(provider_request.tools.expect("tools")[0]["function"]["name"], "lookup_weather");
         assert_eq!(provider_request.tool_choice.expect("tool choice"), &json!("auto"));
         assert_eq!(provider_request.reasoning.expect("reasoning").effort.as_deref(), Some("high"));
@@ -376,9 +389,17 @@ mod tests {
     fn completed_response_includes_function_calls() {
         let request = xrouter_contracts::ResponsesRequest {
             model: "gpt-4.1-mini".to_string(),
+            instructions: None,
+            previous_response_id: None,
             input: xrouter_contracts::ResponsesInput::Text("call the tool".to_string()),
+            parallel_tool_calls: None,
             stream: true,
             reasoning: None,
+            store: None,
+            include: None,
+            service_tier: None,
+            prompt_cache_key: None,
+            text: None,
             tools: None,
             tool_choice: None,
         };

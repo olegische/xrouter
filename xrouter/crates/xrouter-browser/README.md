@@ -82,10 +82,14 @@ Current event callback payloads are serialized `ResponseEvent` values from `xrou
 `runResponsesStream(...)` is the canonical browser entrypoint for OpenAI Responses-compatible
 agent flows. It accepts a serialized `ResponsesRequest`, including:
 
+1. top-level `instructions`
+2. optional `previous_response_id`
 1. structured `input`
-2. `tools`
-3. `tool_choice`
-4. optional `reasoning`
+3. `tools`
+4. `tool_choice`
+5. optional `parallel_tool_calls`
+6. optional `reasoning`
+7. optional `store`, `include`, `service_tier`, `prompt_cache_key`, and `text`
 
 Accepted `ResponsesRequest.input` forms:
 
@@ -97,6 +101,8 @@ Accepted `ResponsesRequest.input` forms:
    - plain string
    - structured content-part array
    - JSON object/array payload
+5. item array containing Codex/OpenAI-style history items such as `reasoning`,
+   `custom_tool_call_output`, `mcp_tool_call_output`, and `tool_search_output`
 
 Round-trippable browser contract guarantees:
 
@@ -109,6 +115,8 @@ Round-trippable browser contract guarantees:
    arrays
 5. downstream provider adapters may still serialize rich tool output into string form when the
    upstream provider only supports string tool messages
+6. top-level `instructions` remain separate from `input` on the browser contract and are not
+   expected to be flattened by the host
 
 Event behavior:
 
@@ -139,9 +147,8 @@ What cancellation is not:
 These items are intentionally outside the XRouter wasm library contract:
 
 1. any specific host protocol for downstream applications
-2. any specific `codex-rs` adapter shapes
-3. any bundled browser UI requirement
-4. multi-provider parity beyond the first accepted browser-safe provider path
+2. any bundled browser UI requirement
+3. multi-provider parity beyond the first accepted browser-safe provider path
 
 ## Packaging
 

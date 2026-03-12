@@ -7,7 +7,7 @@ use serde_json::json;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 use tracing::{debug, info};
-use xrouter_contracts::{ReasoningConfig, ResponsesInput};
+use xrouter_contracts::{ReasoningConfig, ResponsesInput, ResponsesRequest};
 use xrouter_core::{
     CoreError, ProviderClient, ProviderGenerateRequest, ProviderGenerateStreamRequest,
     ProviderOutcome,
@@ -54,6 +54,7 @@ impl ProviderClient for XrouterClient {
         let url = self.runtime.build_url("chat/completions")?;
         let (payload, normalization) = build_xrouter_payload(
             request.model,
+            request.instructions,
             request.input,
             request.reasoning,
             request.tools,
@@ -89,6 +90,7 @@ impl ProviderClient for XrouterClient {
         let url = self.runtime.build_url("chat/completions")?;
         let (payload, normalization) = build_xrouter_payload(
             request.request.model,
+            request.request.instructions,
             request.request.input,
             request.request.reasoning,
             request.request.tools,
@@ -127,6 +129,7 @@ impl ProviderClient for XrouterClient {
 
 pub(crate) fn build_xrouter_payload(
     model: &str,
+    instructions: Option<&str>,
     input: &ResponsesInput,
     reasoning: Option<&ReasoningConfig>,
     tools: Option<&[Value]>,
@@ -136,8 +139,22 @@ pub(crate) fn build_xrouter_payload(
     let normalized_tool_choice =
         normalize_tool_choice_for_chat_completions(tool_choice, !normalized_tools.tools.is_empty());
     let mut payload = base_chat_payload(
-        model,
-        input,
+        &ResponsesRequest {
+            model: model.to_string(),
+            instructions: instructions.map(str::to_string),
+            previous_response_id: None,
+            input: input.clone(),
+            parallel_tool_calls: None,
+            stream: true,
+            reasoning: reasoning.cloned(),
+            store: None,
+            include: None,
+            service_tier: None,
+            prompt_cache_key: None,
+            text: None,
+            tools: None,
+            tool_choice: None,
+        },
         Some(&normalized_tools.tools),
         normalized_tool_choice.as_ref(),
     );
@@ -308,7 +325,7 @@ mod tests {
             "parameters":{"type":"object","properties":{"cmd":{"type":"string"}}}
         })];
         let (payload, normalization) =
-            build_xrouter_payload("zai-org/GLM-4.7-Flash", &input, None, Some(&tools), None);
+            build_xrouter_payload("zai-org/GLM-4.7-Flash", None, &input, None, Some(&tools), None);
 
         assert_eq!(normalization.tools_in, 1);
         assert_eq!(normalization.tools_out, 1);

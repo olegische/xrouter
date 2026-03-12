@@ -12,10 +12,43 @@ pub enum StageName {
     Generate,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
 pub struct ReasoningConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum TextVerbosity {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TextFormatType {
+    JsonSchema,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
+pub struct TextFormatConfig {
+    #[serde(rename = "type")]
+    pub kind: TextFormatType,
+    pub strict: bool,
+    pub schema: Value,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
+pub struct TextControls {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verbosity: Option<TextVerbosity>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<TextFormatConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
@@ -37,7 +70,7 @@ impl ResponseInputContent {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
 pub struct ResponseInputPart {
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
@@ -47,6 +80,12 @@ pub struct ResponseInputPart {
     pub input_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -86,7 +125,7 @@ impl ResponseToolOutput {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
 pub struct ResponseInputItem {
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
@@ -103,7 +142,29 @@ pub struct ResponseInputItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encrypted_content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_turn: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -127,11 +188,27 @@ impl ResponsesInput {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
 pub struct ResponsesRequest {
     pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_response_id: Option<String>,
     pub input: ResponsesInput,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
     #[serde(default)]
     pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<ReasoningConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub store: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<TextControls>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -276,9 +353,17 @@ impl ChatCompletionsRequest {
 
         ResponsesRequest {
             model: self.model,
+            instructions: None,
+            previous_response_id: None,
             input: ResponsesInput::Text(input),
+            parallel_tool_calls: None,
             stream: self.stream,
             reasoning: self.reasoning,
+            store: None,
+            include: None,
+            service_tier: None,
+            prompt_cache_key: None,
+            text: None,
             tools: None,
             tool_choice: None,
         }
@@ -370,6 +455,50 @@ fn flatten_response_item(item: &ResponseInputItem) -> Option<String> {
         }
         return Some(format!("assistant_function_call:{name}:{arguments}"));
     }
+    if kind == "custom_tool_call" {
+        let name = item.name.as_deref().unwrap_or("custom_tool");
+        let input = item.input.as_deref().unwrap_or("");
+        if input.trim().is_empty() {
+            return Some(format!("assistant_custom_tool_call:{name}"));
+        }
+        return Some(format!("assistant_custom_tool_call:{name}:{input}"));
+    }
+    if kind == "custom_tool_call_output" || kind == "mcp_tool_call_output" {
+        let content = item
+            .output
+            .as_ref()
+            .and_then(ResponseToolOutput::to_text_lossy)
+            .or_else(|| extract_content_text(item.content.as_ref()))
+            .or_else(|| item.text.as_deref().map(str::trim).map(str::to_string))?;
+        if let Some(call_id) = item.call_id.as_deref()
+            && !call_id.trim().is_empty()
+        {
+            return Some(format!("tool:{call_id}:{content}"));
+        }
+        return Some(format!("tool:{content}"));
+    }
+    if kind == "reasoning" {
+        return item
+            .summary
+            .as_ref()
+            .and_then(|summary| extract_summary_text(summary))
+            .or_else(|| item.content.as_ref().and_then(ResponseInputContent::to_text))
+            .map(|content| format!("assistant_reasoning:{content}"));
+    }
+    if kind == "tool_search_call" {
+        let execution = item.execution.as_deref().unwrap_or("").trim();
+        if !execution.is_empty() {
+            return Some(format!("assistant_tool_search_call:{execution}"));
+        }
+    }
+    if kind == "tool_search_output" {
+        let tools = item
+            .tools
+            .as_ref()
+            .and_then(|tools| serde_json::to_string(tools).ok())
+            .filter(|value| !value.is_empty())?;
+        return Some(format!("tool_search_output:{tools}"));
+    }
     extract_item_text(item)
 }
 
@@ -394,10 +523,23 @@ fn flatten_response_input_parts(parts: &[ResponseInputPart]) -> Option<String> {
                 .as_deref()
                 .or(part.output_text.as_deref())
                 .or(part.text.as_deref())
+                .or(part.value.as_deref())
                 .map(str::trim)
                 .filter(|text| !text.is_empty())
         })
-        .collect::<String>();
+        .collect::<Vec<_>>()
+        .join("\n");
+    if merged.is_empty() { None } else { Some(merged) }
+}
+
+fn extract_summary_text(summary: &[Value]) -> Option<String> {
+    let merged = summary
+        .iter()
+        .filter_map(|item| {
+            item.get("text").and_then(Value::as_str).map(str::trim).filter(|text| !text.is_empty())
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     if merged.is_empty() { None } else { Some(merged) }
 }
 
@@ -463,6 +605,9 @@ mod tests {
                     text: Some("line 1".to_string()),
                     input_text: None,
                     output_text: None,
+                    image_url: None,
+                    detail: None,
+                    value: None,
                     extra: Default::default(),
                 },
                 ResponseInputPart {
@@ -470,11 +615,14 @@ mod tests {
                     text: Some("line 2".to_string()),
                     input_text: None,
                     output_text: None,
+                    image_url: None,
+                    detail: None,
+                    value: None,
                     extra: Default::default(),
                 },
             ])
         );
-        assert_eq!(request.input.to_canonical_text(), "tool:call_123:line 1line 2");
+        assert_eq!(request.input.to_canonical_text(), "tool:call_123:line 1\nline 2");
     }
 
     #[test]
@@ -492,5 +640,99 @@ mod tests {
             Some(ResponseToolOutput::Json(serde_json::json!({"ok": true, "count": 2})))
         );
         assert_eq!(request.input.to_canonical_text(), "tool:call_123:{\"count\":2,\"ok\":true}");
+    }
+
+    #[test]
+    fn responses_request_deserializes_full_codex_style_contract() {
+        let request: ResponsesRequest = serde_json::from_str(
+            r#"{
+                "model":"deepseek-chat",
+                "instructions":"base instructions",
+                "previous_response_id":"resp_prev_1",
+                "input":[
+                    {
+                        "type":"message",
+                        "role":"user",
+                        "content":[
+                            {"type":"input_text","text":"hello"},
+                            {"type":"input_image","image_url":"https://example.com/cat.png","detail":"high"}
+                        ]
+                    },
+                    {
+                        "type":"message",
+                        "role":"assistant",
+                        "content":[{"type":"output_text","text":"working on it"}],
+                        "phase":"commentary"
+                    },
+                    {
+                        "type":"reasoning",
+                        "summary":[{"type":"summary_text","text":"checked workspace"}],
+                        "encrypted_content":"secret"
+                    },
+                    {
+                        "type":"function_call",
+                        "call_id":"call_1",
+                        "name":"list_dir",
+                        "arguments":"{\"dir_path\":\"/workspace\"}"
+                    },
+                    {
+                        "type":"function_call_output",
+                        "call_id":"call_1",
+                        "output":[{"type":"input_text","text":"Absolute path: /workspace"}]
+                    },
+                    {
+                        "type":"custom_tool_call_output",
+                        "call_id":"call_2",
+                        "output":"patch applied"
+                    }
+                ],
+                "parallel_tool_calls":true,
+                "reasoning":{"effort":"medium","summary":"auto"},
+                "store":false,
+                "stream":true,
+                "include":["reasoning.encrypted_content"],
+                "service_tier":"priority",
+                "prompt_cache_key":"conv_123",
+                "text":{"verbosity":"high","format":{"type":"json_schema","strict":true,"schema":{"type":"object"},"name":"codex_output_schema"}},
+                "tools":[{"type":"function","function":{"name":"list_dir","parameters":{"type":"object"}}}],
+                "tool_choice":"auto"
+            }"#,
+        )
+        .expect("full codex-style request must deserialize");
+
+        assert_eq!(request.instructions.as_deref(), Some("base instructions"));
+        assert_eq!(request.previous_response_id.as_deref(), Some("resp_prev_1"));
+        assert_eq!(request.parallel_tool_calls, Some(true));
+        assert_eq!(request.store, Some(false));
+        assert_eq!(
+            request.include.as_ref().expect("include"),
+            &vec!["reasoning.encrypted_content".to_string()]
+        );
+        assert_eq!(request.service_tier.as_deref(), Some("priority"));
+        assert_eq!(request.prompt_cache_key.as_deref(), Some("conv_123"));
+        assert_eq!(
+            request.text.as_ref().and_then(|text| text.verbosity.as_ref()),
+            Some(&TextVerbosity::High)
+        );
+        let ResponsesInput::Items(items) = &request.input else {
+            panic!("expected item input");
+        };
+        assert_eq!(items.len(), 6);
+        assert_eq!(
+            items[0].content.as_ref().and_then(ResponseInputContent::to_text).as_deref(),
+            Some("hello")
+        );
+        assert_eq!(
+            items[2].summary.as_ref().and_then(|summary| extract_summary_text(summary)).as_deref(),
+            Some("checked workspace")
+        );
+        assert_eq!(
+            items[4].output.as_ref().and_then(ResponseToolOutput::to_text_lossy).as_deref(),
+            Some("Absolute path: /workspace")
+        );
+        assert_eq!(
+            request.input.to_canonical_text(),
+            "user:hello\nassistant:working on it\nassistant_reasoning:checked workspace\nassistant_function_call:list_dir:{\"dir_path\":\"/workspace\"}\ntool:call_1:Absolute path: /workspace\ntool:call_2:patch applied"
+        );
     }
 }

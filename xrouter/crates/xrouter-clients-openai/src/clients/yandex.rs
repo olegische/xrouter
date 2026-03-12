@@ -891,7 +891,6 @@ mod tests {
         sanitize_yandex_input,
     };
     use serde_json::json;
-    use std::collections::BTreeMap;
     use xrouter_contracts::{
         ResponseInputContent, ResponseInputItem, ResponseToolOutput, ResponsesInput,
     };
@@ -1023,23 +1022,13 @@ mod tests {
                 kind: Some("message".to_string()),
                 role: Some("user".to_string()),
                 content: Some(ResponseInputContent::Text("hi".to_string())),
-                text: None,
-                output: None,
-                call_id: None,
-                name: None,
-                arguments: None,
-                extra: BTreeMap::new(),
+                ..Default::default()
             },
             ResponseInputItem {
                 kind: Some("message".to_string()),
                 role: Some("assistant".to_string()),
                 content: Some(ResponseInputContent::Text("".to_string())),
-                text: None,
-                output: None,
-                call_id: None,
-                name: None,
-                arguments: None,
-                extra: BTreeMap::new(),
+                ..Default::default()
             },
         ]);
         let sanitized = sanitize_yandex_input(&input);
@@ -1056,35 +1045,22 @@ mod tests {
             ResponseInputItem {
                 kind: Some("function_call".to_string()),
                 role: Some("assistant".to_string()),
-                content: None,
-                text: None,
-                output: None,
                 call_id: Some("call_1".to_string()),
                 name: Some("exec_command".to_string()),
                 arguments: Some("{\"cmd\":\"ls\"}".to_string()),
-                extra: BTreeMap::new(),
+                ..Default::default()
             },
             ResponseInputItem {
                 kind: Some("message".to_string()),
                 role: Some("assistant".to_string()),
                 content: Some(ResponseInputContent::Text("thinking".to_string())),
-                text: None,
-                output: None,
-                call_id: None,
-                name: None,
-                arguments: None,
-                extra: BTreeMap::new(),
+                ..Default::default()
             },
             ResponseInputItem {
                 kind: Some("function_call_output".to_string()),
-                role: None,
-                content: None,
-                text: None,
                 output: Some(ResponseToolOutput::Text("{\"ok\":true}".to_string())),
                 call_id: Some("call_1".to_string()),
-                name: None,
-                arguments: None,
-                extra: BTreeMap::new(),
+                ..Default::default()
             },
         ]);
         let sanitized = sanitize_yandex_input(&input);

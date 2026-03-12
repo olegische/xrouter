@@ -7,7 +7,7 @@ use serde_json::json;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 use tracing::{debug, info};
-use xrouter_contracts::{ReasoningConfig, ResponsesInput};
+use xrouter_contracts::{ReasoningConfig, ResponsesInput, ResponsesRequest};
 use xrouter_core::{
     CoreError, ProviderClient, ProviderGenerateRequest, ProviderGenerateStreamRequest,
     ProviderOutcome,
@@ -54,6 +54,7 @@ impl ProviderClient for ZaiClient {
         let url = self.runtime.build_url("chat/completions")?;
         let (payload, normalization) = build_zai_payload(
             request.model,
+            request.instructions,
             request.input,
             request.reasoning,
             request.tools,
@@ -89,6 +90,7 @@ impl ProviderClient for ZaiClient {
         let url = self.runtime.build_url("chat/completions")?;
         let (payload, normalization) = build_zai_payload(
             request.request.model,
+            request.request.instructions,
             request.request.input,
             request.request.reasoning,
             request.request.tools,
@@ -127,6 +129,7 @@ impl ProviderClient for ZaiClient {
 
 pub(crate) fn build_zai_payload(
     model: &str,
+    instructions: Option<&str>,
     input: &ResponsesInput,
     reasoning: Option<&ReasoningConfig>,
     tools: Option<&[Value]>,
@@ -136,8 +139,22 @@ pub(crate) fn build_zai_payload(
     let normalized_tool_choice =
         normalize_tool_choice_for_chat_completions(tool_choice, !normalized_tools.tools.is_empty());
     let mut payload = base_chat_payload(
-        model,
-        input,
+        &ResponsesRequest {
+            model: model.to_string(),
+            instructions: instructions.map(str::to_string),
+            previous_response_id: None,
+            input: input.clone(),
+            parallel_tool_calls: None,
+            stream: true,
+            reasoning: reasoning.cloned(),
+            store: None,
+            include: None,
+            service_tier: None,
+            prompt_cache_key: None,
+            text: None,
+            tools: None,
+            tool_choice: None,
+        },
         Some(&normalized_tools.tools),
         normalized_tool_choice.as_ref(),
     );
@@ -295,7 +312,7 @@ mod tests {
             json!({"type":"web_search"}),
         ];
         let (payload, normalization) =
-            build_zai_payload("glm-5", &input, None, Some(&tools), Some(&json!("auto")));
+            build_zai_payload("glm-5", None, &input, None, Some(&tools), Some(&json!("auto")));
 
         assert_eq!(normalization.tools_in, 2);
         assert_eq!(normalization.tools_out, 1);
@@ -339,7 +356,7 @@ mod tests {
             "parameters":{"type":"object","properties":{}}
         })];
         let (payload, _) =
-            build_zai_payload("glm-5", &input, None, Some(&tools), Some(&json!("auto")));
+            build_zai_payload("glm-5", None, &input, None, Some(&tools), Some(&json!("auto")));
         assert_eq!(payload["tool_stream"], json!(true));
     }
 
@@ -350,7 +367,8 @@ mod tests {
             "type":"function",
             "function":{"name":"ping"}
         })];
-        let (payload, normalization) = build_zai_payload("glm-5", &input, None, Some(&tools), None);
+        let (payload, normalization) =
+            build_zai_payload("glm-5", None, &input, None, Some(&tools), None);
 
         assert_eq!(normalization.tools_out, 1);
         let payload_tools = payload["tools"].as_array().expect("tools must exist");
@@ -365,8 +383,8 @@ mod tests {
     #[test]
     fn enables_thinking_when_effort_present() {
         let input = ResponsesInput::Text("Reply with ok".to_string());
-        let reasoning = ReasoningConfig { effort: Some("high".to_string()) };
-        let (payload, _) = build_zai_payload("glm-5", &input, Some(&reasoning), None, None);
+        let reasoning = ReasoningConfig { effort: Some("high".to_string()), summary: None };
+        let (payload, _) = build_zai_payload("glm-5", None, &input, Some(&reasoning), None, None);
         assert_eq!(payload["thinking"]["type"], "enabled");
         assert!(payload.get("reasoning").is_none());
     }
@@ -374,8 +392,8 @@ mod tests {
     #[test]
     fn disables_thinking_when_effort_none() {
         let input = ResponsesInput::Text("Reply with ok".to_string());
-        let reasoning = ReasoningConfig { effort: Some("none".to_string()) };
-        let (payload, _) = build_zai_payload("glm-5", &input, Some(&reasoning), None, None);
+        let reasoning = ReasoningConfig { effort: Some("none".to_string()), summary: None };
+        let (payload, _) = build_zai_payload("glm-5", None, &input, Some(&reasoning), None, None);
         assert_eq!(payload["thinking"]["type"], "disabled");
         assert!(payload.get("reasoning").is_none());
     }
@@ -383,7 +401,7 @@ mod tests {
     #[test]
     fn forces_stream_true() {
         let input = ResponsesInput::Text("hello".to_string());
-        let (payload, _) = build_zai_payload("glm-5", &input, None, None, None);
+        let (payload, _) = build_zai_payload("glm-5", None, &input, None, None, None);
         assert_eq!(payload["stream"], json!(true));
     }
 }

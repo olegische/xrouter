@@ -790,7 +790,6 @@ mod tests {
         map_gigachat_chat_completion_stream_text,
     };
     use serde_json::{Value, json};
-    use std::collections::BTreeMap;
     use xrouter_contracts::{
         ResponseInputContent, ResponseInputItem, ResponseToolOutput, ResponsesInput,
     };
@@ -827,45 +826,25 @@ mod tests {
                 kind: Some("message".to_string()),
                 role: Some("user".to_string()),
                 content: Some(ResponseInputContent::Text("u1".to_string())),
-                text: None,
-                output: None,
-                call_id: None,
-                name: None,
-                arguments: None,
-                extra: BTreeMap::new(),
+                ..Default::default()
             },
             ResponseInputItem {
                 kind: Some("message".to_string()),
                 role: Some("system".to_string()),
                 content: Some(ResponseInputContent::Text("s1".to_string())),
-                text: None,
-                output: None,
-                call_id: None,
-                name: None,
-                arguments: None,
-                extra: BTreeMap::new(),
+                ..Default::default()
             },
             ResponseInputItem {
                 kind: Some("message".to_string()),
                 role: Some("assistant".to_string()),
                 content: Some(ResponseInputContent::Text("a1".to_string())),
-                text: None,
-                output: None,
-                call_id: None,
-                name: None,
-                arguments: None,
-                extra: BTreeMap::new(),
+                ..Default::default()
             },
             ResponseInputItem {
                 kind: Some("message".to_string()),
                 role: Some("developer".to_string()),
                 content: Some(ResponseInputContent::Text("s2".to_string())),
-                text: None,
-                output: None,
-                call_id: None,
-                name: None,
-                arguments: None,
-                extra: BTreeMap::new(),
+                ..Default::default()
             },
         ]);
         let (payload, _) = build_gigachat_payload("GigaChat-2", &input, None, None);
@@ -920,24 +899,18 @@ mod tests {
             ResponseInputItem {
                 kind: Some("function_call".to_string()),
                 role: Some("assistant".to_string()),
-                content: None,
-                text: None,
-                output: None,
                 call_id: Some("call_1".to_string()),
                 name: Some("exec_command".to_string()),
                 arguments: Some("{\"cmd\":\"ls\"}".to_string()),
-                extra: BTreeMap::new(),
+                ..Default::default()
             },
             ResponseInputItem {
                 kind: Some("function_call_output".to_string()),
                 role: Some("tool".to_string()),
-                content: None,
-                text: None,
                 output: Some(ResponseToolOutput::Text("README.md\nmain.py".to_string())),
                 call_id: Some("call_1".to_string()),
                 name: Some("exec_command".to_string()),
-                arguments: None,
-                extra: BTreeMap::new(),
+                ..Default::default()
             },
         ]);
         let (payload, _) = build_gigachat_payload("GigaChat-2", &input, None, None);
@@ -956,35 +929,24 @@ mod tests {
             ResponseInputItem {
                 kind: Some("function_call".to_string()),
                 role: Some("assistant".to_string()),
-                content: None,
-                text: None,
-                output: None,
                 call_id: Some("call_1".to_string()),
                 name: Some("exec_command".to_string()),
                 arguments: Some("{\"cmd\":\"ls\"}".to_string()),
-                extra: BTreeMap::new(),
+                ..Default::default()
             },
             ResponseInputItem {
                 kind: Some("message".to_string()),
                 role: Some("assistant".to_string()),
                 content: Some(ResponseInputContent::Text("thinking".to_string())),
-                text: None,
-                output: None,
-                call_id: None,
-                name: None,
-                arguments: None,
-                extra: BTreeMap::new(),
+                ..Default::default()
             },
             ResponseInputItem {
                 kind: Some("function_call_output".to_string()),
                 role: Some("tool".to_string()),
-                content: None,
-                text: None,
                 output: Some(ResponseToolOutput::Text("{\"ok\":true}".to_string())),
                 call_id: Some("call_1".to_string()),
                 name: Some("exec_command".to_string()),
-                arguments: None,
-                extra: BTreeMap::new(),
+                ..Default::default()
             },
         ]);
         let (payload, _) = build_gigachat_payload("GigaChat-2", &input, None, None);

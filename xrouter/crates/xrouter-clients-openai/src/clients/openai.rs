@@ -4,7 +4,7 @@ use reqwest::Client;
 use serde_json::{Value, json};
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
-use xrouter_contracts::{ReasoningConfig, ResponsesInput};
+use xrouter_contracts::{ReasoningConfig, ResponsesInput, ResponsesRequest};
 use xrouter_core::{
     CoreError, ProviderClient, ProviderGenerateRequest, ProviderGenerateStreamRequest,
     ProviderOutcome,
@@ -52,6 +52,7 @@ impl ProviderClient for OpenAiClient {
         let url = self.runtime.build_url("chat/completions")?;
         let payload = build_openai_payload(
             request.model,
+            request.instructions,
             request.input,
             request.reasoning,
             request.tools,
@@ -69,6 +70,7 @@ impl ProviderClient for OpenAiClient {
         let url = self.runtime.build_url("chat/completions")?;
         let payload = build_openai_payload(
             request.request.model,
+            request.request.instructions,
             request.request.input,
             request.request.reasoning,
             request.request.tools,
@@ -89,12 +91,32 @@ impl ProviderClient for OpenAiClient {
 
 pub(crate) fn build_openai_payload(
     model: &str,
+    instructions: Option<&str>,
     input: &ResponsesInput,
     reasoning: Option<&ReasoningConfig>,
     tools: Option<&[Value]>,
     tool_choice: Option<&Value>,
 ) -> Value {
-    let mut payload = base_chat_payload(model, input, tools, tool_choice);
+    let mut payload = base_chat_payload(
+        &ResponsesRequest {
+            model: model.to_string(),
+            instructions: instructions.map(str::to_string),
+            previous_response_id: None,
+            input: input.clone(),
+            parallel_tool_calls: None,
+            stream: true,
+            reasoning: reasoning.cloned(),
+            store: None,
+            include: None,
+            service_tier: None,
+            prompt_cache_key: None,
+            text: None,
+            tools: None,
+            tool_choice: None,
+        },
+        tools,
+        tool_choice,
+    );
     if let Some(reasoning_cfg) = normalize_openai_reasoning(reasoning) {
         payload.insert("reasoning".to_string(), reasoning_cfg);
     }
@@ -119,15 +141,16 @@ mod tests {
     #[test]
     fn maps_xhigh_to_high() {
         let input = ResponsesInput::Text("Reply with ok".to_string());
-        let reasoning = ReasoningConfig { effort: Some("xhigh".to_string()) };
-        let payload = build_openai_payload("gpt-4.1-mini", &input, Some(&reasoning), None, None);
+        let reasoning = ReasoningConfig { effort: Some("xhigh".to_string()), summary: None };
+        let payload =
+            build_openai_payload("gpt-4.1-mini", None, &input, Some(&reasoning), None, None);
         assert_eq!(payload["reasoning"]["effort"], "high");
     }
 
     #[test]
     fn forces_stream_true() {
         let input = ResponsesInput::Text("hello".to_string());
-        let payload = build_openai_payload("gpt-4.1-mini", &input, None, None, None);
+        let payload = build_openai_payload("gpt-4.1-mini", None, &input, None, None, None);
         assert_eq!(payload["stream"], json!(true));
     }
 }

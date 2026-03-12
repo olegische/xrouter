@@ -37,6 +37,7 @@ pub struct ExecutionContext {
     pub response_completed: bool,
     pub model: String,
     pub request_input: ResponsesInput,
+    pub request_instructions: Option<String>,
     pub input: String,
     pub request_reasoning: Option<ReasoningConfig>,
     pub request_tools: Option<Vec<serde_json::Value>>,
@@ -61,6 +62,7 @@ impl ExecutionContext {
             response_completed: false,
             model: request.model,
             request_input,
+            request_instructions: request.instructions,
             input,
             request_reasoning: request.reasoning,
             request_tools: request.tools,
@@ -382,6 +384,7 @@ pub trait ResponseEventSink: Send + Sync {
 #[derive(Debug, Clone, Copy)]
 pub struct ProviderGenerateRequest<'a> {
     pub model: &'a str,
+    pub instructions: Option<&'a str>,
     pub input: &'a ResponsesInput,
     pub reasoning: Option<&'a ReasoningConfig>,
     pub tools: Option<&'a [serde_json::Value]>,
@@ -487,6 +490,7 @@ impl StageHandler for GenerateHandler {
                 request_id: &context.request_id,
                 request: ProviderGenerateRequest {
                     model: &context.model,
+                    instructions: context.request_instructions.as_deref(),
                     input: &context.request_input,
                     reasoning: context.request_reasoning.as_ref(),
                     tools: context.request_tools.as_deref(),
@@ -1060,9 +1064,17 @@ mod tests {
         let engine = build_engine(&fixture);
         let request = ResponsesRequest {
             model: fixture.model.to_string(),
+            instructions: None,
+            previous_response_id: None,
             input: xrouter_contracts::ResponsesInput::Text(fixture.input.to_string()),
+            parallel_tool_calls: None,
             stream: false,
             reasoning: None,
+            store: None,
+            include: None,
+            service_tier: None,
+            prompt_cache_key: None,
+            text: None,
             tools: None,
             tool_choice: None,
         };
@@ -1206,9 +1218,17 @@ usage_total=3
         let engine = ExecutionEngine::new(provider);
         let request = ResponsesRequest {
             model: "fake".to_string(),
+            instructions: None,
+            previous_response_id: None,
             input: xrouter_contracts::ResponsesInput::Text("hello".to_string()),
+            parallel_tool_calls: None,
             stream: false,
             reasoning: None,
+            store: None,
+            include: None,
+            service_tier: None,
+            prompt_cache_key: None,
+            text: None,
             tools: None,
             tool_choice: None,
         };
@@ -1228,9 +1248,17 @@ usage_total=3
         let engine = ExecutionEngine::new(provider);
         let request = ResponsesRequest {
             model: "fake".to_string(),
+            instructions: None,
+            previous_response_id: None,
             input: xrouter_contracts::ResponsesInput::Text("hello".to_string()),
+            parallel_tool_calls: None,
             stream: false,
             reasoning: None,
+            store: None,
+            include: None,
+            service_tier: None,
+            prompt_cache_key: None,
+            text: None,
             tools: None,
             tool_choice: None,
         };
@@ -1246,9 +1274,17 @@ usage_total=3
         let sink = Arc::new(CaptureSink { events: events.clone() });
         let request = ResponsesRequest {
             model: "fake".to_string(),
+            instructions: None,
+            previous_response_id: None,
             input: xrouter_contracts::ResponsesInput::Text("hello".to_string()),
+            parallel_tool_calls: None,
             stream: true,
             reasoning: None,
+            store: None,
+            include: None,
+            service_tier: None,
+            prompt_cache_key: None,
+            text: None,
             tools: None,
             tool_choice: None,
         };
@@ -1271,9 +1307,17 @@ usage_total=3
         let sink = Arc::new(CaptureSink { events: events.clone() });
         let request = ResponsesRequest {
             model: "fake".to_string(),
+            instructions: None,
+            previous_response_id: None,
             input: xrouter_contracts::ResponsesInput::Text("hello".to_string()),
+            parallel_tool_calls: None,
             stream: true,
             reasoning: None,
+            store: None,
+            include: None,
+            service_tier: None,
+            prompt_cache_key: None,
+            text: None,
             tools: None,
             tool_choice: None,
         };
@@ -1294,9 +1338,17 @@ usage_total=3
         let sink = Arc::new(CaptureSink { events: events.clone() });
         let request = ResponsesRequest {
             model: "fake".to_string(),
+            instructions: None,
+            previous_response_id: None,
             input: xrouter_contracts::ResponsesInput::Text("hello".to_string()),
+            parallel_tool_calls: None,
             stream: true,
             reasoning: None,
+            store: None,
+            include: None,
+            service_tier: None,
+            prompt_cache_key: None,
+            text: None,
             tools: None,
             tool_choice: None,
         };
@@ -1325,9 +1377,17 @@ usage_total=3
         let sink = Arc::new(CaptureSink { events: events.clone() });
         let request = ResponsesRequest {
             model: "fake".to_string(),
+            instructions: None,
+            previous_response_id: None,
             input: xrouter_contracts::ResponsesInput::Text("hello".to_string()),
+            parallel_tool_calls: None,
             stream: true,
             reasoning: None,
+            store: None,
+            include: None,
+            service_tier: None,
+            prompt_cache_key: None,
+            text: None,
             tools: None,
             tool_choice: None,
         };

@@ -7,7 +7,7 @@ use serde_json::json;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 use tracing::{debug, info};
-use xrouter_contracts::{ReasoningConfig, ResponsesInput};
+use xrouter_contracts::{ReasoningConfig, ResponsesInput, ResponsesRequest};
 use xrouter_core::{
     CoreError, ProviderClient, ProviderGenerateRequest, ProviderGenerateStreamRequest,
     ProviderOutcome,
@@ -54,6 +54,7 @@ impl ProviderClient for DeepSeekClient {
         let url = self.runtime.build_url("chat/completions")?;
         let (payload, normalization) = build_deepseek_payload(
             request.model,
+            request.instructions,
             request.input,
             request.reasoning,
             request.tools,
@@ -89,6 +90,7 @@ impl ProviderClient for DeepSeekClient {
         let url = self.runtime.build_url("chat/completions")?;
         let (payload, normalization) = build_deepseek_payload(
             request.request.model,
+            request.request.instructions,
             request.request.input,
             request.request.reasoning,
             request.request.tools,
@@ -127,6 +129,7 @@ impl ProviderClient for DeepSeekClient {
 
 pub(crate) fn build_deepseek_payload(
     model: &str,
+    instructions: Option<&str>,
     input: &ResponsesInput,
     reasoning: Option<&ReasoningConfig>,
     tools: Option<&[Value]>,
@@ -136,8 +139,22 @@ pub(crate) fn build_deepseek_payload(
     let normalized_tool_choice =
         normalize_tool_choice_for_chat_completions(tool_choice, !normalized_tools.tools.is_empty());
     let mut payload = base_chat_payload(
-        model,
-        input,
+        &ResponsesRequest {
+            model: model.to_string(),
+            instructions: instructions.map(str::to_string),
+            previous_response_id: None,
+            input: input.clone(),
+            parallel_tool_calls: None,
+            stream: true,
+            reasoning: reasoning.cloned(),
+            store: None,
+            include: None,
+            service_tier: None,
+            prompt_cache_key: None,
+            text: None,
+            tools: None,
+            tool_choice: None,
+        },
         Some(&normalized_tools.tools),
         normalized_tool_choice.as_ref(),
     );
@@ -355,9 +372,9 @@ mod tests {
     #[test]
     fn chat_enables_thinking_when_effort_present() {
         let input = ResponsesInput::Text("Reply with ok".to_string());
-        let reasoning = ReasoningConfig { effort: Some("medium".to_string()) };
+        let reasoning = ReasoningConfig { effort: Some("medium".to_string()), summary: None };
         let (payload, _) =
-            build_deepseek_payload("deepseek-chat", &input, Some(&reasoning), None, None);
+            build_deepseek_payload("deepseek-chat", None, &input, Some(&reasoning), None, None);
         assert_eq!(payload["thinking"]["type"], "enabled");
         assert!(payload.get("reasoning").is_none());
     }
@@ -365,16 +382,16 @@ mod tests {
     #[test]
     fn reasoner_does_not_set_thinking() {
         let input = ResponsesInput::Text("Reply with ok".to_string());
-        let reasoning = ReasoningConfig { effort: Some("high".to_string()) };
+        let reasoning = ReasoningConfig { effort: Some("high".to_string()), summary: None };
         let (payload, _) =
-            build_deepseek_payload("deepseek-reasoner", &input, Some(&reasoning), None, None);
+            build_deepseek_payload("deepseek-reasoner", None, &input, Some(&reasoning), None, None);
         assert!(payload.get("thinking").is_none());
     }
 
     #[test]
     fn forces_stream_true() {
         let input = ResponsesInput::Text("hello".to_string());
-        let (payload, _) = build_deepseek_payload("deepseek-chat", &input, None, None, None);
+        let (payload, _) = build_deepseek_payload("deepseek-chat", None, &input, None, None, None);
         assert_eq!(payload["stream"], json!(true));
     }
 }

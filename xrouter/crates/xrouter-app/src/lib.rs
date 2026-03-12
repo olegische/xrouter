@@ -441,6 +441,20 @@ json.usage_total=4
             ),
             (
                 r#"
+name=responses_full_codex_request_shape
+method=POST
+path=/api/v1/responses
+body={"model":"deepseek/deepseek-chat","instructions":"base instructions","previous_response_id":"resp_prev_1","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello from codex"},{"type":"input_image","image_url":"https://example.com/cat.png","detail":"high"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"working on it"}],"phase":"commentary"},{"type":"reasoning","summary":[{"type":"summary_text","text":"checked workspace"}],"encrypted_content":"secret"},{"type":"function_call","call_id":"call_1","name":"list_dir","arguments":"{\"dir_path\":\"/workspace\"}"},{"type":"function_call_output","call_id":"call_1","output":[{"type":"input_text","text":"Absolute path: /workspace"}]},{"type":"custom_tool_call_output","call_id":"call_2","output":"patch applied"}],"parallel_tool_calls":true,"reasoning":{"effort":"medium","summary":"auto"},"store":false,"stream":false,"include":["reasoning.encrypted_content"],"service_tier":"priority","prompt_cache_key":"conv_123","text":{"verbosity":"high","format":{"type":"json_schema","strict":true,"schema":{"type":"object"},"name":"codex_output_schema"}},"tools":[{"type":"function","function":{"name":"list_dir","parameters":{"type":"object"}}}],"tool_choice":"auto"}
+"#,
+                r#"
+status=200
+json.status=completed
+json.output_text=[deepseek] user:hello from codex assistant:working on it assistant_reasoning:checked workspace assistant_function_call:list_dir:{"dir_path":"/workspace"} tool:call_1:Absolute path: /workspace tool:call_2:patch applied
+json.usage_total=28
+"#,
+            ),
+            (
+                r#"
 name=responses_invalid_json_shape
 method=POST
 path=/api/v1/responses

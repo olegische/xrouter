@@ -7,7 +7,7 @@ use serde_json::json;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 use tracing::{debug, info};
-use xrouter_contracts::{ReasoningConfig, ResponsesInput};
+use xrouter_contracts::{ReasoningConfig, ResponsesInput, ResponsesRequest};
 use xrouter_core::{
     CoreError, ProviderClient, ProviderGenerateRequest, ProviderGenerateStreamRequest,
     ProviderOutcome,
@@ -54,6 +54,7 @@ impl ProviderClient for OpenRouterClient {
         let url = self.runtime.build_url("chat/completions")?;
         let (payload, normalization) = build_openrouter_payload(
             request.model,
+            request.instructions,
             request.input,
             request.reasoning,
             request.tools,
@@ -89,6 +90,7 @@ impl ProviderClient for OpenRouterClient {
         let url = self.runtime.build_url("chat/completions")?;
         let (payload, normalization) = build_openrouter_payload(
             request.request.model,
+            request.request.instructions,
             request.request.input,
             request.request.reasoning,
             request.request.tools,
@@ -127,6 +129,7 @@ impl ProviderClient for OpenRouterClient {
 
 pub(crate) fn build_openrouter_payload(
     model: &str,
+    instructions: Option<&str>,
     input: &ResponsesInput,
     reasoning: Option<&ReasoningConfig>,
     tools: Option<&[Value]>,
@@ -136,8 +139,22 @@ pub(crate) fn build_openrouter_payload(
     let normalized_tool_choice =
         normalize_tool_choice_for_chat_completions(tool_choice, !normalized_tools.tools.is_empty());
     let mut payload = base_chat_payload(
-        model,
-        input,
+        &ResponsesRequest {
+            model: model.to_string(),
+            instructions: instructions.map(str::to_string),
+            previous_response_id: None,
+            input: input.clone(),
+            parallel_tool_calls: None,
+            stream: true,
+            reasoning: reasoning.cloned(),
+            store: None,
+            include: None,
+            service_tier: None,
+            prompt_cache_key: None,
+            text: None,
+            tools: None,
+            tool_choice: None,
+        },
         Some(&normalized_tools.tools),
         normalized_tool_choice.as_ref(),
     );
@@ -302,7 +319,7 @@ mod tests {
             json!({"type":"web_search"}),
         ];
         let (payload, normalization) =
-            build_openrouter_payload("openai/gpt-4.1-mini", &input, None, Some(&tools), None);
+            build_openrouter_payload("openai/gpt-4.1-mini", None, &input, None, Some(&tools), None);
 
         assert_eq!(normalization.tools_in, 2);
         assert_eq!(normalization.tools_out, 1);
@@ -335,9 +352,9 @@ mod tests {
     #[test]
     fn keeps_reasoning_effort_as_is() {
         let input = ResponsesInput::Text("Reply with ok".to_string());
-        let reasoning = ReasoningConfig { effort: Some("xhigh".to_string()) };
+        let reasoning = ReasoningConfig { effort: Some("xhigh".to_string()), summary: None };
         let (payload, _) =
-            build_openrouter_payload("openai/gpt-5.2", &input, Some(&reasoning), None, None);
+            build_openrouter_payload("openai/gpt-5.2", None, &input, Some(&reasoning), None, None);
         assert_eq!(payload["reasoning"]["effort"], "xhigh");
         assert!(payload.get("thinking").is_none());
     }
@@ -345,7 +362,8 @@ mod tests {
     #[test]
     fn forces_stream_true() {
         let input = ResponsesInput::Text("hello".to_string());
-        let (payload, _) = build_openrouter_payload("openai/gpt-5-mini", &input, None, None, None);
+        let (payload, _) =
+            build_openrouter_payload("openai/gpt-5-mini", None, &input, None, None, None);
         assert_eq!(payload["stream"], json!(true));
     }
 }
