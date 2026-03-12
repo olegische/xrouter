@@ -87,6 +87,29 @@ agent flows. It accepts a serialized `ResponsesRequest`, including:
 3. `tool_choice`
 4. optional `reasoning`
 
+Accepted `ResponsesRequest.input` forms:
+
+1. plain input string
+2. item array containing `message` items with `role` and either string `content` or structured
+   content-part arrays
+3. item array containing `function_call` items with `call_id`, `name`, and string `arguments`
+4. item array containing `function_call_output` items with `call_id` and `output` encoded as:
+   - plain string
+   - structured content-part array
+   - JSON object/array payload
+
+Round-trippable browser contract guarantees:
+
+1. `response_completed.output` may emit `message`, `reasoning`, and `function_call` items
+2. emitted `function_call` items can be sent back in follow-up `input` with the same `call_id`,
+   `name`, and `arguments`
+3. follow-up `function_call_output.output` preserves structured payloads on the browser contract;
+   browser hosts do not need to flatten them before sending the next turn
+4. `message.content` remains structured on the browser contract when callers supply content-part
+   arrays
+5. downstream provider adapters may still serialize rich tool output into string form when the
+   upstream provider only supports string tool messages
+
 Event behavior:
 
 1. live text and reasoning deltas are forwarded as `ResponseEvent`

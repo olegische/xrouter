@@ -11,7 +11,8 @@ use tokio::sync::Mutex;
 use tracing::{debug, info};
 use uuid::Uuid;
 use xrouter_contracts::{
-    ResponseInputContent, ResponseInputItem, ResponsesInput, ToolCall, ToolFunction,
+    ResponseInputContent, ResponseInputItem, ResponseToolOutput, ResponsesInput, ToolCall,
+    ToolFunction,
 };
 use xrouter_core::{
     CoreError, ProviderClient, ProviderGenerateRequest, ProviderGenerateStreamRequest,
@@ -455,10 +456,8 @@ fn map_item_to_gigachat_message(
             .filter(|value| !value.is_empty())?;
         let content = item
             .output
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
+            .as_ref()
+            .and_then(ResponseToolOutput::to_serialized_string)
             .or_else(|| extract_input_item_text(item))?;
         let normalized_content = normalize_gigachat_function_result_content(&content);
         return Some(json!({
@@ -481,27 +480,7 @@ fn extract_input_item_text(item: &ResponseInputItem) -> Option<String> {
     if let Some(text) = item.text.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
         return Some(text.to_string());
     }
-    let content = item.content.as_ref()?;
-    match content {
-        ResponseInputContent::Text(text) => {
-            let text = text.trim();
-            if text.is_empty() { None } else { Some(text.to_string()) }
-        }
-        ResponseInputContent::Parts(parts) => {
-            let joined = parts
-                .iter()
-                .filter_map(|part| {
-                    part.input_text
-                        .as_deref()
-                        .or(part.output_text.as_deref())
-                        .or(part.text.as_deref())
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                })
-                .collect::<String>();
-            if joined.is_empty() { None } else { Some(joined) }
-        }
-    }
+    item.content.as_ref().and_then(ResponseInputContent::to_text)
 }
 
 fn normalize_gigachat_function_result_content(raw: &str) -> String {
@@ -812,7 +791,9 @@ mod tests {
     };
     use serde_json::{Value, json};
     use std::collections::BTreeMap;
-    use xrouter_contracts::{ResponseInputContent, ResponseInputItem, ResponsesInput};
+    use xrouter_contracts::{
+        ResponseInputContent, ResponseInputItem, ResponseToolOutput, ResponsesInput,
+    };
 
     #[test]
     fn gigachat_uses_functions_and_function_call_fields() {
@@ -952,7 +933,7 @@ mod tests {
                 role: Some("tool".to_string()),
                 content: None,
                 text: None,
-                output: Some("README.md\nmain.py".to_string()),
+                output: Some(ResponseToolOutput::Text("README.md\nmain.py".to_string())),
                 call_id: Some("call_1".to_string()),
                 name: Some("exec_command".to_string()),
                 arguments: None,
@@ -999,7 +980,7 @@ mod tests {
                 role: Some("tool".to_string()),
                 content: None,
                 text: None,
-                output: Some("{\"ok\":true}".to_string()),
+                output: Some(ResponseToolOutput::Text("{\"ok\":true}".to_string())),
                 call_id: Some("call_1".to_string()),
                 name: Some("exec_command".to_string()),
                 arguments: None,

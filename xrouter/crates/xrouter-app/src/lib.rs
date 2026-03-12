@@ -413,6 +413,34 @@ json.usage_total=2
             ),
             (
                 r#"
+name=responses_codex_message_parts
+method=POST
+path=/api/v1/responses
+body={"model":"deepseek/deepseek-chat","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello from codex"}]}],"stream":false}
+"#,
+                r#"
+status=200
+json.status=completed
+json.output_text=[deepseek] user:hello from codex
+json.usage_total=6
+"#,
+            ),
+            (
+                r#"
+name=responses_codex_tool_output_json
+method=POST
+path=/api/v1/responses
+body={"model":"deepseek/deepseek-chat","input":[{"type":"function_call","call_id":"call_1","name":"read_file","arguments":"{\"path\":\"/workspace/calculator.py\"}"},{"type":"function_call_output","call_id":"call_1","output":{"path":"/workspace/calculator.py","content":"print(\"hello\")"}}],"stream":false}
+"#,
+                r#"
+status=200
+json.status=completed
+json.output_text=[deepseek] assistant_function_call:read_file:{"path":"/workspace/calculator.py"} tool:call_1:{"content":"print(\"hello\")","path":"/workspace/calculator.py"}
+json.usage_total=4
+"#,
+            ),
+            (
+                r#"
 name=responses_invalid_json_shape
 method=POST
 path=/api/v1/responses

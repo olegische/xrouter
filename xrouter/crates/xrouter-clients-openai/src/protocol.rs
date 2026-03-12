@@ -1,5 +1,7 @@
 use serde_json::{Map, Value, json};
-use xrouter_contracts::{ResponseInputContent, ResponseInputItem, ResponsesInput};
+use xrouter_contracts::{
+    ResponseInputContent, ResponseInputItem, ResponseToolOutput, ResponsesInput,
+};
 
 pub fn base_chat_payload(
     model: &str,
@@ -91,10 +93,8 @@ fn map_response_input_item_to_chat_message(
         }
         let output = item
             .output
-            .as_deref()
-            .map(str::trim)
-            .filter(|text| !text.is_empty())
-            .map(str::to_string)
+            .as_ref()
+            .and_then(ResponseToolOutput::to_serialized_string)
             .or_else(|| extract_input_item_text(item))?;
 
         let mut tool_msg = Map::new();
@@ -124,33 +124,15 @@ fn extract_input_item_text(item: &ResponseInputItem) -> Option<String> {
     if let Some(text) = item.text.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
         return Some(text.to_string());
     }
-    let content = item.content.as_ref()?;
-    match content {
-        ResponseInputContent::Text(text) => {
-            let text = text.trim();
-            if text.is_empty() { None } else { Some(text.to_string()) }
-        }
-        ResponseInputContent::Parts(parts) => {
-            let joined = parts
-                .iter()
-                .filter_map(|part| {
-                    part.input_text
-                        .as_deref()
-                        .or(part.output_text.as_deref())
-                        .or(part.text.as_deref())
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                })
-                .collect::<String>();
-            if joined.is_empty() { None } else { Some(joined) }
-        }
-    }
+    item.content.as_ref().and_then(ResponseInputContent::to_text)
 }
 
 #[cfg(test)]
 mod tests {
     use super::build_chat_messages_from_responses_input;
-    use xrouter_contracts::{ResponseInputContent, ResponseInputItem, ResponsesInput};
+    use xrouter_contracts::{
+        ResponseInputContent, ResponseInputItem, ResponseToolOutput, ResponsesInput,
+    };
 
     #[test]
     fn responses_input_items_map_to_chat_messages_with_tool_roundtrip() {
@@ -171,7 +153,7 @@ mod tests {
                 role: None,
                 content: None,
                 text: None,
-                output: Some("{\"ok\":true}".to_string()),
+                output: Some(ResponseToolOutput::Text("{\"ok\":true}".to_string())),
                 call_id: Some("call_1".to_string()),
                 name: None,
                 arguments: None,
@@ -199,5 +181,34 @@ mod tests {
         assert_eq!(messages[1]["name"], "read_file");
         assert_eq!(messages[2]["role"], "user");
         assert_eq!(messages[2]["content"], "continue");
+    }
+
+    #[test]
+    fn function_call_output_parts_are_serialized_for_tool_messages() {
+        let input = ResponsesInput::Items(vec![ResponseInputItem {
+            kind: Some("function_call_output".to_string()),
+            role: None,
+            content: None,
+            text: None,
+            output: Some(ResponseToolOutput::Parts(vec![xrouter_contracts::ResponseInputPart {
+                kind: Some("input_text".to_string()),
+                text: Some("line 1".to_string()),
+                input_text: None,
+                output_text: None,
+                extra: Default::default(),
+            }])),
+            call_id: Some("call_1".to_string()),
+            name: Some("read_file".to_string()),
+            arguments: None,
+            extra: Default::default(),
+        }]);
+
+        let messages = build_chat_messages_from_responses_input(&input);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "tool");
+        let serialized = messages[0]["content"].as_str().expect("string content");
+        let parsed: serde_json::Value =
+            serde_json::from_str(serialized).expect("tool payload should stay valid JSON");
+        assert_eq!(parsed, serde_json::json!([{ "type": "input_text", "text": "line 1" }]));
     }
 }

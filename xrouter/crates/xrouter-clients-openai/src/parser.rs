@@ -21,7 +21,8 @@ pub fn map_chat_completion_response(
         .tool_calls
         .as_ref()
         .map(|calls| map_provider_tool_calls(calls))
-        .filter(|calls| !calls.is_empty());
+        .filter(|calls| !calls.is_empty())
+        .or_else(|| extract_deepseek_dsml_tool_calls(&content));
     if content.is_empty() && tool_calls.is_none() {
         return Err(CoreError::Provider("provider returned empty message content".to_string()));
     }
@@ -56,7 +57,8 @@ pub fn map_responses_api_response(
     payload: ResponsesApiResponse,
 ) -> Result<ProviderOutcome, CoreError> {
     let content = extract_message_text_from_responses_output(&payload.output).unwrap_or_default();
-    let tool_calls = extract_tool_calls_from_responses_output(&payload.output);
+    let tool_calls = extract_tool_calls_from_responses_output(&payload.output)
+        .or_else(|| extract_deepseek_dsml_tool_calls(&content));
     if content.is_empty() && tool_calls.is_none() {
         warn!(
             event = "provider.responses.empty_message_content",
@@ -167,6 +169,9 @@ pub fn map_chat_completion_stream_text(payload: &str) -> Result<ProviderOutcome,
         } else {
             tool_calls = Some(direct_tool_calls);
         }
+    }
+    if tool_calls.is_none() {
+        tool_calls = extract_deepseek_dsml_tool_calls(&all_content);
     }
     let reasoning = if reasoning.trim().is_empty() { None } else { Some(reasoning) };
     let reasoning_details =
@@ -533,6 +538,34 @@ mod tests {
     }
 
     #[test]
+    fn map_chat_completion_response_extracts_deepseek_dsml_tool_call() {
+        let payload = ChatCompletionsResponse {
+            choices: vec![Choice {
+                message: Message {
+                    content: Value::String(
+                        "Checking workspace.\n<｜DSML｜function_calls>\n<｜DSML｜invoke name=\"execute\">\n<｜DSML｜parameter name=\"command\" string=\"true\">find /workspace -type f -name \"*.py\" | head -20</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜function_calls>"
+                            .to_string(),
+                    ),
+                    reasoning: None,
+                    reasoning_content: None,
+                    reasoning_details: None,
+                    tool_calls: None,
+                },
+            }],
+            usage: Some(Usage { completion_tokens: Some(7) }),
+        };
+
+        let outcome = map_chat_completion_response(payload).expect("dsml tool call must parse");
+        let tool_calls = outcome.tool_calls.expect("tool calls must be present");
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].function.name, "execute");
+        assert_eq!(
+            tool_calls[0].function.arguments,
+            "{\"command\":\"find /workspace -type f -name \\\"*.py\\\" | head -20\"}"
+        );
+    }
+
+    #[test]
     fn reasoning_details_summary_is_extracted() {
         let details = vec![json!({
             "type": "reasoning.summary",
@@ -644,6 +677,33 @@ mod tests {
     }
 
     #[test]
+    fn map_responses_api_response_extracts_deepseek_dsml_tool_call() {
+        let payload = ResponsesApiResponse {
+            output: vec![ResponsesApiOutputItem {
+                kind: "message".to_string(),
+                content: Some(vec![json!({
+                    "type":"output_text",
+                    "text":"I will inspect files.\n<｜DSML｜function_calls>\n<｜DSML｜invoke name=\"execute\">\n<｜DSML｜parameter name=\"command\" string=\"true\">find /workspace -type f | head -5</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜function_calls>"
+                })]),
+                summary: None,
+                call_id: None,
+                name: None,
+                arguments: None,
+            }],
+            usage: Some(ResponsesApiUsage { output_tokens: 2 }),
+        };
+
+        let outcome = map_responses_api_response(payload).expect("responses dsml must parse");
+        let tool_calls = outcome.tool_calls.expect("tool calls must be present");
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].function.name, "execute");
+        assert_eq!(
+            tool_calls[0].function.arguments,
+            "{\"command\":\"find /workspace -type f | head -5\"}"
+        );
+    }
+
+    #[test]
     fn chat_sse_with_choice_level_tool_calls_is_not_empty() {
         let sse = concat!(
             "data: {\"choices\":[{\"delta\":{},\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\\\"Kyiv\\\"}\"}}],\"finish_reason\":\"tool_calls\"}]}\n\n",
@@ -669,6 +729,22 @@ mod tests {
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].function.name, "get_weather");
         assert_eq!(tool_calls[0].function.arguments, "{\"city\":\"Kyiv\"}");
+    }
+
+    #[test]
+    fn chat_sse_with_deepseek_dsml_tool_call_is_not_empty() {
+        let sse = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Checking workspace.\\n<｜DSML｜function_calls>\\n<｜DSML｜invoke name=\\\"execute\\\">\\n<｜DSML｜parameter name=\\\"command\\\" string=\\\"true\\\">find /workspace -type f | head -5</｜DSML｜parameter>\\n</｜DSML｜invoke>\\n</｜DSML｜function_calls>\"}}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let outcome = map_chat_completion_stream_text(sse).expect("dsml stream must parse");
+        let tool_calls = outcome.tool_calls.expect("tool calls must be present");
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].function.name, "execute");
+        assert_eq!(
+            tool_calls[0].function.arguments,
+            "{\"command\":\"find /workspace -type f | head -5\"}"
+        );
     }
 }
 
@@ -773,6 +849,76 @@ fn extract_tool_calls_from_responses_output(
             })
         })
         .collect::<Vec<_>>();
+    if calls.is_empty() { None } else { Some(calls) }
+}
+
+fn extract_deepseek_dsml_tool_calls(content: &str) -> Option<Vec<ToolCall>> {
+    let mut calls = Vec::new();
+    let mut search_from = 0usize;
+
+    while let Some(invoke_offset) = content[search_from..].find("<｜DSML｜invoke name=\"") {
+        let invoke_start = search_from + invoke_offset;
+        let name_start = invoke_start + "<｜DSML｜invoke name=\"".len();
+        let Some(name_end_rel) = content[name_start..].find("\">") else {
+            break;
+        };
+        let name_end = name_start + name_end_rel;
+        let name = content[name_start..name_end].trim();
+        let body_start = name_end + 2;
+        let Some(body_end_rel) = content[body_start..].find("</｜DSML｜invoke>") else {
+            break;
+        };
+        let body_end = body_start + body_end_rel;
+        let body = &content[body_start..body_end];
+
+        if name.is_empty() {
+            search_from = body_end + "</｜DSML｜invoke>".len();
+            continue;
+        }
+
+        let mut params = serde_json::Map::new();
+        let mut param_search_from = 0usize;
+        while let Some(param_offset) = body[param_search_from..].find("<｜DSML｜parameter name=\"")
+        {
+            let param_start = param_search_from + param_offset;
+            let key_start = param_start + "<｜DSML｜parameter name=\"".len();
+            let Some(key_end_rel) = body[key_start..].find('"') else {
+                break;
+            };
+            let key_end = key_start + key_end_rel;
+            let key = body[key_start..key_end].trim();
+            let Some(tag_end_rel) = body[key_end..].find('>') else {
+                break;
+            };
+            let value_start = key_end + tag_end_rel + 1;
+            let Some(value_end_rel) = body[value_start..].find("</｜DSML｜parameter>") else {
+                break;
+            };
+            let value_end = value_start + value_end_rel;
+
+            if !key.is_empty() {
+                let raw_value = body[value_start..value_end].trim();
+                let value = serde_json::from_str::<Value>(raw_value)
+                    .unwrap_or_else(|_| Value::String(raw_value.to_string()));
+                params.insert(key.to_string(), value);
+            }
+
+            param_search_from = value_end + "</｜DSML｜parameter>".len();
+        }
+
+        if !params.is_empty() {
+            let arguments =
+                serde_json::to_string(&Value::Object(params)).unwrap_or_else(|_| "{}".to_string());
+            calls.push(ToolCall {
+                id: format!("call_{}", Uuid::new_v4().simple()),
+                kind: "function".to_string(),
+                function: ToolFunction { name: name.to_string(), arguments },
+            });
+        }
+
+        search_from = body_end + "</｜DSML｜invoke>".len();
+    }
+
     if calls.is_empty() { None } else { Some(calls) }
 }
 

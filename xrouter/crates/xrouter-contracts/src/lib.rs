@@ -25,6 +25,18 @@ pub enum ResponseInputContent {
     Parts(Vec<ResponseInputPart>),
 }
 
+impl ResponseInputContent {
+    pub fn to_text(&self) -> Option<String> {
+        match self {
+            Self::Text(text) => {
+                let text = text.trim();
+                if text.is_empty() { None } else { Some(text.to_string()) }
+            }
+            Self::Parts(parts) => flatten_response_input_parts(parts),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
 pub struct ResponseInputPart {
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
@@ -40,6 +52,41 @@ pub struct ResponseInputPart {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
+#[serde(untagged)]
+pub enum ResponseToolOutput {
+    Text(String),
+    Parts(Vec<ResponseInputPart>),
+    Json(Value),
+}
+
+impl ResponseToolOutput {
+    pub fn to_text_lossy(&self) -> Option<String> {
+        match self {
+            Self::Text(text) => {
+                let text = text.trim();
+                if text.is_empty() { None } else { Some(text.to_string()) }
+            }
+            Self::Parts(parts) => flatten_response_input_parts(parts)
+                .or_else(|| serde_json::to_string(parts).ok().filter(|value| !value.is_empty())),
+            Self::Json(value) => serialize_json_value(value),
+        }
+    }
+
+    pub fn to_serialized_string(&self) -> Option<String> {
+        match self {
+            Self::Text(text) => {
+                let text = text.trim();
+                if text.is_empty() { None } else { Some(text.to_string()) }
+            }
+            Self::Parts(parts) => {
+                serde_json::to_string(parts).ok().filter(|value| !value.is_empty())
+            }
+            Self::Json(value) => serialize_json_value(value),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, ToSchema)]
 pub struct ResponseInputItem {
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
@@ -50,7 +97,7 @@ pub struct ResponseInputItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub output: Option<String>,
+    pub output: Option<ResponseToolOutput>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -304,10 +351,8 @@ fn flatten_response_item(item: &ResponseInputItem) -> Option<String> {
     if kind == "function_call_output" {
         let content = item
             .output
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
+            .as_ref()
+            .and_then(ResponseToolOutput::to_text_lossy)
             .or_else(|| extract_content_text(item.content.as_ref()))
             .or_else(|| item.text.as_deref().map(str::trim).map(str::to_string))?;
         if let Some(call_id) = item.call_id.as_deref()
@@ -338,25 +383,32 @@ fn extract_item_text(item: &ResponseInputItem) -> Option<String> {
 }
 
 fn extract_content_text(content: Option<&ResponseInputContent>) -> Option<String> {
-    match content? {
-        ResponseInputContent::Text(text) => {
+    content.and_then(ResponseInputContent::to_text)
+}
+
+fn flatten_response_input_parts(parts: &[ResponseInputPart]) -> Option<String> {
+    let merged = parts
+        .iter()
+        .filter_map(|part| {
+            part.input_text
+                .as_deref()
+                .or(part.output_text.as_deref())
+                .or(part.text.as_deref())
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+        })
+        .collect::<String>();
+    if merged.is_empty() { None } else { Some(merged) }
+}
+
+fn serialize_json_value(value: &Value) -> Option<String> {
+    match value {
+        Value::Null => None,
+        Value::String(text) => {
             let text = text.trim();
             if text.is_empty() { None } else { Some(text.to_string()) }
         }
-        ResponseInputContent::Parts(parts) => {
-            let merged = parts
-                .iter()
-                .filter_map(|part| {
-                    part.input_text
-                        .as_deref()
-                        .or(part.output_text.as_deref())
-                        .or(part.text.as_deref())
-                        .map(str::trim)
-                        .filter(|text| !text.is_empty())
-                })
-                .collect::<String>();
-            if merged.is_empty() { None } else { Some(merged) }
-        }
+        _ => serde_json::to_string(value).ok().filter(|text| !text.is_empty()),
     }
 }
 
@@ -390,5 +442,55 @@ mod tests {
         )
         .expect("request must deserialize");
         assert_eq!(request.input.to_canonical_text(), "tool:call_123:{\"ok\":true}");
+    }
+
+    #[test]
+    fn responses_input_preserves_structured_function_call_output_parts() {
+        let request: ResponsesRequest = serde_json::from_str(
+            r#"{"model":"deepseek/deepseek-chat","input":[{"type":"function_call_output","call_id":"call_123","output":[{"type":"input_text","text":"line 1"},{"type":"input_text","text":"line 2"}]}],"stream":false}"#,
+        )
+        .expect("request must deserialize");
+
+        let ResponsesInput::Items(items) = &request.input else {
+            panic!("expected items input");
+        };
+        let output = items[0].output.as_ref().expect("output");
+        assert_eq!(
+            output,
+            &ResponseToolOutput::Parts(vec![
+                ResponseInputPart {
+                    kind: Some("input_text".to_string()),
+                    text: Some("line 1".to_string()),
+                    input_text: None,
+                    output_text: None,
+                    extra: Default::default(),
+                },
+                ResponseInputPart {
+                    kind: Some("input_text".to_string()),
+                    text: Some("line 2".to_string()),
+                    input_text: None,
+                    output_text: None,
+                    extra: Default::default(),
+                },
+            ])
+        );
+        assert_eq!(request.input.to_canonical_text(), "tool:call_123:line 1line 2");
+    }
+
+    #[test]
+    fn responses_input_preserves_json_function_call_output() {
+        let request: ResponsesRequest = serde_json::from_str(
+            r#"{"model":"deepseek/deepseek-chat","input":[{"type":"function_call_output","call_id":"call_123","output":{"ok":true,"count":2}}],"stream":false}"#,
+        )
+        .expect("request must deserialize");
+
+        let ResponsesInput::Items(items) = &request.input else {
+            panic!("expected items input");
+        };
+        assert_eq!(
+            items[0].output,
+            Some(ResponseToolOutput::Json(serde_json::json!({"ok": true, "count": 2})))
+        );
+        assert_eq!(request.input.to_canonical_text(), "tool:call_123:{\"count\":2,\"ok\":true}");
     }
 }

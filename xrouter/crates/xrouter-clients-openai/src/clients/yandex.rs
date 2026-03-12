@@ -7,7 +7,8 @@ use std::sync::Arc;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 use xrouter_contracts::{
-    ResponseInputContent, ResponseInputItem, ResponsesInput, ToolCall, ToolFunction,
+    ResponseInputContent, ResponseInputItem, ResponseToolOutput, ResponsesInput, ToolCall,
+    ToolFunction,
 };
 use xrouter_core::{
     CoreError, ProviderClient, ProviderGenerateRequest, ProviderGenerateStreamRequest,
@@ -293,29 +294,11 @@ fn extract_item_text(item: &ResponseInputItem) -> Option<String> {
         .filter(|text| !text.is_empty())
         .map(str::to_string)
         .or_else(|| extract_content_text(item.content.as_ref()))
+        .or_else(|| item.output.as_ref().and_then(ResponseToolOutput::to_serialized_string))
 }
 
 fn extract_content_text(content: Option<&ResponseInputContent>) -> Option<String> {
-    match content? {
-        ResponseInputContent::Text(text) => {
-            let text = text.trim();
-            if text.is_empty() { None } else { Some(text.to_string()) }
-        }
-        ResponseInputContent::Parts(parts) => {
-            let merged = parts
-                .iter()
-                .filter_map(|part| {
-                    part.input_text
-                        .as_deref()
-                        .or(part.output_text.as_deref())
-                        .or(part.text.as_deref())
-                        .map(str::trim)
-                        .filter(|text| !text.is_empty())
-                })
-                .collect::<String>();
-            if merged.is_empty() { None } else { Some(merged) }
-        }
-    }
+    content.and_then(ResponseInputContent::to_text)
 }
 
 pub(crate) fn build_yandex_upstream_model(
@@ -909,7 +892,9 @@ mod tests {
     };
     use serde_json::json;
     use std::collections::BTreeMap;
-    use xrouter_contracts::{ResponseInputContent, ResponseInputItem, ResponsesInput};
+    use xrouter_contracts::{
+        ResponseInputContent, ResponseInputItem, ResponseToolOutput, ResponsesInput,
+    };
 
     #[test]
     fn includes_normalized_tools_in_responses_payload() {
@@ -1095,7 +1080,7 @@ mod tests {
                 role: None,
                 content: None,
                 text: None,
-                output: Some("{\"ok\":true}".to_string()),
+                output: Some(ResponseToolOutput::Text("{\"ok\":true}".to_string())),
                 call_id: Some("call_1".to_string()),
                 name: None,
                 arguments: None,
