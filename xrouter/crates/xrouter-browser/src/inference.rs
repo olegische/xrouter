@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use xrouter_clients_openai::runtime::SharedProviderRuntime;
 use xrouter_clients_openai::{DeepSeekClient, OpenAiClient, OpenRouterClient, ZaiClient};
@@ -101,7 +101,7 @@ impl BrowserInferenceClient {
             tool_choice: None,
         };
         let (outcome, _) =
-            self.generate_responses_with_outcome(request_id, &request, sender).await?;
+            self.generate_responses_with_outcome(request_id, &request, None, sender).await?;
         Ok(outcome)
     }
 
@@ -119,8 +119,19 @@ impl BrowserInferenceClient {
         request: &ResponsesRequest,
         sender: Option<&dyn ResponseEventSink>,
     ) -> Result<ResponsesResponse, CoreError> {
-        let (_, response) =
-            self.generate_responses_with_outcome(request_id, request, sender).await?;
+        self.generate_responses_stream_with_headers(request_id, request, None, sender).await
+    }
+
+    pub async fn generate_responses_stream_with_headers(
+        &self,
+        request_id: &str,
+        request: &ResponsesRequest,
+        request_headers: Option<&HashMap<String, String>>,
+        sender: Option<&dyn ResponseEventSink>,
+    ) -> Result<ResponsesResponse, CoreError> {
+        let (_, response) = self
+            .generate_responses_with_outcome(request_id, request, request_headers, sender)
+            .await?;
         Ok(response)
     }
 
@@ -128,9 +139,11 @@ impl BrowserInferenceClient {
         &self,
         request_id: &str,
         request: &ResponsesRequest,
+        request_headers: Option<&HashMap<String, String>>,
         sender: Option<&dyn ResponseEventSink>,
     ) -> Result<(ProviderOutcome, ResponsesResponse), CoreError> {
-        let provider_request = build_provider_request(request);
+        let forward_headers = extract_forward_headers(self.provider, request_headers);
+        let provider_request = build_provider_request(request, &forward_headers);
         match self.provider {
             BrowserProvider::DeepSeek => {
                 let client = DeepSeekClient::with_runtime(self.shared_runtime.clone());
@@ -201,7 +214,10 @@ impl BrowserInferenceClient {
     }
 }
 
-fn build_provider_request<'a>(request: &'a ResponsesRequest) -> ProviderGenerateRequest<'a> {
+fn build_provider_request<'a>(
+    request: &'a ResponsesRequest,
+    forward_headers: &'a [(String, String)],
+) -> ProviderGenerateRequest<'a> {
     ProviderGenerateRequest {
         model: &request.model,
         instructions: request.instructions.as_deref(),
@@ -210,8 +226,34 @@ fn build_provider_request<'a>(request: &'a ResponsesRequest) -> ProviderGenerate
         tools: request.tools.as_deref(),
         tool_choice: request.tool_choice.as_ref(),
         auth_bearer: None,
-        forward_headers: &[],
+        forward_headers,
     }
+}
+
+fn extract_forward_headers(
+    provider: BrowserProvider,
+    request_headers: Option<&HashMap<String, String>>,
+) -> Vec<(String, String)> {
+    if provider != BrowserProvider::OpenRouter {
+        return Vec::new();
+    }
+    let Some(request_headers) = request_headers else {
+        return Vec::new();
+    };
+
+    const OPENROUTER_FORWARD_HEADERS: [&str; 4] =
+        ["HTTP-Referer", "X-OpenRouter-Title", "X-Title", "X-OpenRouter-Categories"];
+
+    OPENROUTER_FORWARD_HEADERS
+        .iter()
+        .filter_map(|name| {
+            request_headers.iter().find_map(|(header_name, value)| {
+                header_name
+                    .eq_ignore_ascii_case(name)
+                    .then_some(((*name).to_string(), value.clone()))
+            })
+        })
+        .collect()
 }
 
 async fn finalize_stream_request(
@@ -273,7 +315,7 @@ async fn emit_non_live_events(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::{collections::HashMap, sync::Mutex};
 
     use async_trait::async_trait;
     use serde_json::json;
@@ -282,7 +324,7 @@ mod tests {
 
     use super::{
         BrowserInferenceClient, BrowserProvider, DEFAULT_DEMO_PROMPT, build_provider_request,
-        emit_non_live_events,
+        emit_non_live_events, extract_forward_headers,
     };
 
     #[derive(Default)]
@@ -379,11 +421,42 @@ mod tests {
             tool_choice: Some(json!("auto")),
         };
 
-        let provider_request = build_provider_request(&request);
+        let provider_request = build_provider_request(&request, &[]);
         assert_eq!(provider_request.instructions, Some("be precise"));
         assert_eq!(provider_request.tools.expect("tools")[0]["function"]["name"], "lookup_weather");
         assert_eq!(provider_request.tool_choice.expect("tool choice"), &json!("auto"));
         assert_eq!(provider_request.reasoning.expect("reasoning").effort.as_deref(), Some("high"));
+        assert!(provider_request.forward_headers.is_empty());
+    }
+
+    #[test]
+    fn extracts_openrouter_forward_headers_from_browser_request_headers() {
+        let mut request_headers = HashMap::new();
+        request_headers.insert("http-referer".to_string(), "https://xcodex.chat".to_string());
+        request_headers.insert("x-title".to_string(), "XCodex".to_string());
+        request_headers.insert("x-openrouter-categories".to_string(), "cloud-agent".to_string());
+        request_headers.insert("authorization".to_string(), "Bearer ignored".to_string());
+
+        let headers = extract_forward_headers(BrowserProvider::OpenRouter, Some(&request_headers));
+
+        assert_eq!(
+            headers,
+            vec![
+                ("HTTP-Referer".to_string(), "https://xcodex.chat".to_string()),
+                ("X-Title".to_string(), "XCodex".to_string()),
+                ("X-OpenRouter-Categories".to_string(), "cloud-agent".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn ignores_browser_request_headers_for_non_openrouter_provider() {
+        let mut request_headers = HashMap::new();
+        request_headers.insert("HTTP-Referer".to_string(), "https://xcodex.chat".to_string());
+
+        let headers = extract_forward_headers(BrowserProvider::OpenAi, Some(&request_headers));
+
+        assert!(headers.is_empty());
     }
 
     #[test]

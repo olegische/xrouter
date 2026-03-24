@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 use js_sys::Function;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_wasm_bindgen::{from_value, to_value};
+use std::collections::HashMap;
 use wasm_bindgen::JsValue;
 use wasm_bindgen::prelude::wasm_bindgen;
 use xrouter_contracts::{ResponseEvent, ResponsesRequest};
@@ -18,6 +19,14 @@ struct BrowserRunResult {
     output_tokens: u32,
     reasoning: Option<String>,
     emitted_live: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct BrowserResponsesStreamRequest {
+    #[serde(flatten)]
+    request: ResponsesRequest,
+    #[serde(default)]
+    headers: HashMap<String, String>,
 }
 
 struct JsCallbackSink {
@@ -137,12 +146,17 @@ impl WasmBrowserClient {
         request: JsValue,
         on_event: Function,
     ) -> Result<JsValue, JsValue> {
-        let request: ResponsesRequest =
+        let request: BrowserResponsesStreamRequest =
             from_value(request).map_err(|error| JsValue::from_str(&error.to_string()))?;
         let sink = JsCallbackSink::new(request_id.clone(), on_event);
         let response = self
             .inference
-            .generate_responses_stream(&request_id, &request, Some(&sink))
+            .generate_responses_stream_with_headers(
+                &request_id,
+                &request.request,
+                Some(&request.headers),
+                Some(&sink),
+            )
             .await
             .map_err(|error| JsValue::from_str(&error.to_string()))?;
         to_value(&response).map_err(|error| JsValue::from_str(&error.to_string()))
@@ -151,5 +165,45 @@ impl WasmBrowserClient {
     #[wasm_bindgen]
     pub fn cancel(&self, request_id: String) -> Result<(), JsValue> {
         self.inference.cancel(&request_id).map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::BrowserResponsesStreamRequest;
+
+    #[test]
+    fn browser_responses_stream_request_accepts_legacy_payload_without_headers() {
+        let request: BrowserResponsesStreamRequest = serde_json::from_value(json!({
+            "model": "openrouter/openai/gpt-5-mini",
+            "input": "hello",
+            "stream": true
+        }))
+        .expect("legacy browser request should deserialize");
+
+        assert_eq!(request.request.model, "openrouter/openai/gpt-5-mini");
+        assert!(request.headers.is_empty());
+    }
+
+    #[test]
+    fn browser_responses_stream_request_accepts_optional_headers() {
+        let request: BrowserResponsesStreamRequest = serde_json::from_value(json!({
+            "model": "openrouter/openai/gpt-5-mini",
+            "input": "hello",
+            "stream": true,
+            "headers": {
+                "HTTP-Referer": "https://xcodex.chat",
+                "X-OpenRouter-Title": "XCodex"
+            }
+        }))
+        .expect("browser request with headers should deserialize");
+
+        assert_eq!(
+            request.headers.get("HTTP-Referer").map(String::as_str),
+            Some("https://xcodex.chat")
+        );
+        assert_eq!(request.headers.get("X-OpenRouter-Title").map(String::as_str), Some("XCodex"));
     }
 }
