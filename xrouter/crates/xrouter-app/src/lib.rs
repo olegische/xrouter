@@ -8,8 +8,12 @@ pub use startup::app_builder::AppBuilder;
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{
+        collections::{BTreeMap, HashMap},
+        sync::{Arc, Mutex},
+    };
 
+    use async_trait::async_trait;
     use axum::{
         body::{Body, to_bytes},
         http::{HeaderMap, Request, StatusCode},
@@ -24,7 +28,10 @@ mod tests {
         OpenRouterModelsResponse, XrouterProviderModelsResponse, build_models_from_registry,
         map_openrouter_models, map_xrouter_models,
     };
-    use xrouter_core::CoreError;
+    use xrouter_core::{
+        CoreError, ExecutionEngine, ModelDescriptor, ProviderClient, ProviderGenerateRequest,
+        ProviderOutcome,
+    };
 
     #[derive(Debug)]
     struct AppFixture<'a> {
@@ -32,6 +39,57 @@ mod tests {
         method: &'a str,
         path: &'a str,
         body: Option<&'a str>,
+    }
+
+    struct HeaderCaptureProvider {
+        seen_headers: Arc<Mutex<Vec<(String, String)>>>,
+    }
+
+    #[async_trait]
+    impl ProviderClient for HeaderCaptureProvider {
+        async fn generate(
+            &self,
+            request: ProviderGenerateRequest<'_>,
+        ) -> Result<ProviderOutcome, CoreError> {
+            *self.seen_headers.lock().expect("lock must succeed") =
+                request.forward_headers.to_vec();
+            Ok(ProviderOutcome {
+                chunks: vec!["ok".to_string()],
+                output_tokens: 1,
+                reasoning: None,
+                reasoning_details: None,
+                tool_calls: None,
+                emitted_live: false,
+            })
+        }
+    }
+
+    fn build_openrouter_header_capture_app(
+        seen_headers: Arc<Mutex<Vec<(String, String)>>>,
+    ) -> axum::Router {
+        let mut engines = HashMap::new();
+        engines.insert(
+            "openrouter".to_string(),
+            Arc::new(ExecutionEngine::new(Arc::new(HeaderCaptureProvider { seen_headers }))),
+        );
+        let state = AppState::from_parts(
+            false,
+            false,
+            vec![ModelDescriptor {
+                id: "openai/gpt-5-mini".to_string(),
+                provider: "openrouter".to_string(),
+                description: "OpenRouter test model".to_string(),
+                context_length: 128000,
+                tokenizer: "unknown".to_string(),
+                instruct_type: "none".to_string(),
+                modality: "text->text".to_string(),
+                top_provider_context_length: 128000,
+                is_moderated: true,
+                max_completion_tokens: 16384,
+            }],
+            engines,
+        );
+        build_router(state)
     }
 
     impl<'a> AppFixture<'a> {
@@ -653,6 +711,70 @@ json.first_id=<none>
         let payload = String::from_utf8_lossy(&body);
         assert!(payload.contains("\"id\":\"chatcmpl_"), "expected chatcmpl id in stream payload");
         assert!(payload.contains("[DONE]"), "expected done marker in stream payload");
+    }
+
+    #[tokio::test]
+    async fn responses_route_forwards_openrouter_allowlisted_headers() {
+        let seen_headers = Arc::new(Mutex::new(Vec::new()));
+        let app = build_openrouter_header_capture_app(seen_headers.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/responses")
+                    .header("content-type", "application/json")
+                    .header("HTTP-Referer", "https://example.com")
+                    .header("X-OpenRouter-Title", "Example App")
+                    .header("X-OpenRouter-Categories", "cli-agent")
+                    .header("X-Not-Forwarded", "ignore-me")
+                    .body(Body::from(
+                        r#"{"model":"openrouter/openai/gpt-5-mini","input":"hello","stream":false}"#,
+                    ))
+                    .expect("request must build"),
+            )
+            .await
+            .expect("request must complete");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            *seen_headers.lock().expect("lock must succeed"),
+            vec![
+                ("HTTP-Referer".to_string(), "https://example.com".to_string()),
+                ("X-OpenRouter-Title".to_string(), "Example App".to_string()),
+                ("X-OpenRouter-Categories".to_string(), "cli-agent".to_string()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_completions_route_forwards_openrouter_allowlisted_headers() {
+        let seen_headers = Arc::new(Mutex::new(Vec::new()));
+        let app = build_openrouter_header_capture_app(seen_headers.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .header("HTTP-Referer", "https://example.com")
+                    .header("X-Title", "Example Chat App")
+                    .header("Authorization", "Bearer should-not-forward")
+                    .body(Body::from(
+                        r#"{"model":"openrouter/openai/gpt-5-mini","messages":[{"role":"user","content":"hello"}],"stream":false}"#,
+                    ))
+                    .expect("request must build"),
+            )
+            .await
+            .expect("request must complete");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            *seen_headers.lock().expect("lock must succeed"),
+            vec![
+                ("HTTP-Referer".to_string(), "https://example.com".to_string()),
+                ("X-Title".to_string(), "Example Chat App".to_string()),
+            ]
+        );
     }
 
     #[tokio::test]

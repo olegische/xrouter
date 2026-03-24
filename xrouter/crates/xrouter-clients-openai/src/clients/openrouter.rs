@@ -78,8 +78,16 @@ impl ProviderClient for OpenRouterClient {
                 dropped_tool_types = ?normalization.dropped_tool_types
             );
         }
+        log_forwarded_attribution_headers(request.model, request.forward_headers);
         self.runtime
-            .post_chat_completions_stream("request", &url, &payload, request.auth_bearer, &[], None)
+            .post_chat_completions_stream(
+                "request",
+                &url,
+                &payload,
+                request.auth_bearer,
+                request.forward_headers,
+                None,
+            )
             .await
     }
 
@@ -114,13 +122,14 @@ impl ProviderClient for OpenRouterClient {
                 dropped_tool_types = ?normalization.dropped_tool_types
             );
         }
+        log_forwarded_attribution_headers(request.request.model, request.request.forward_headers);
         self.runtime
             .post_chat_completions_stream(
                 request.request_id,
                 &url,
                 &payload,
                 request.request.auth_bearer,
-                &[],
+                request.request.forward_headers,
                 request.sender,
             )
             .await
@@ -305,11 +314,49 @@ fn normalize_function_tool(tool: &Value) -> Option<Value> {
     }))
 }
 
+fn log_forwarded_attribution_headers(model: &str, headers: &[(String, String)]) {
+    let referer = find_forwarded_header(headers, "HTTP-Referer");
+    let title = find_forwarded_header(headers, "X-OpenRouter-Title")
+        .or_else(|| find_forwarded_header(headers, "X-Title"));
+    let categories = find_forwarded_header(headers, "X-OpenRouter-Categories");
+
+    if referer.is_none() && title.is_none() && categories.is_none() {
+        return;
+    }
+
+    debug!(
+        event = "provider.request.headers.forwarded",
+        provider = "openrouter",
+        model = model,
+        openrouter.forwarded_referer = referer.unwrap_or(""),
+        openrouter.forwarded_title = title.unwrap_or(""),
+        openrouter.forwarded_categories = categories.unwrap_or("")
+    );
+}
+
+fn find_forwarded_header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    headers.iter().find_map(|(header_name, value)| {
+        header_name.eq_ignore_ascii_case(name).then_some(value.as_str())
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{build_openrouter_payload, normalize_tool_choice_for_chat_completions};
+    use std::sync::{Arc, Mutex};
+
+    use super::{
+        OpenRouterClient, build_openrouter_payload, find_forwarded_header,
+        normalize_tool_choice_for_chat_completions,
+    };
+    use async_trait::async_trait;
     use serde_json::{Value, json};
     use xrouter_contracts::{ReasoningConfig, ResponsesInput};
+    use xrouter_core::{
+        CoreError, ProviderGenerateRequest, ProviderGenerateStreamRequest, ProviderOutcome,
+        ResponseEventSink,
+    };
+
+    use crate::runtime::ProviderRuntime;
 
     #[test]
     fn keeps_only_function_tools_and_tracks_drops() {
@@ -365,5 +412,137 @@ mod tests {
         let (payload, _) =
             build_openrouter_payload("openai/gpt-5-mini", None, &input, None, None, None);
         assert_eq!(payload["stream"], json!(true));
+    }
+
+    struct HeaderCaptureRuntime {
+        seen_headers: Arc<Mutex<Vec<(String, String)>>>,
+    }
+
+    #[async_trait]
+    impl ProviderRuntime for HeaderCaptureRuntime {
+        fn api_key(&self) -> Option<String> {
+            None
+        }
+
+        fn build_url(&self, path: &str) -> Result<String, CoreError> {
+            Ok(format!("https://openrouter.ai/api/v1/{}", path.trim_start_matches('/')))
+        }
+
+        async fn post_chat_completions_stream(
+            &self,
+            _request_id: &str,
+            _url: &str,
+            _payload: &Value,
+            _bearer_override: Option<&str>,
+            extra_headers: &[(String, String)],
+            _sender: Option<&dyn ResponseEventSink>,
+        ) -> Result<ProviderOutcome, CoreError> {
+            *self.seen_headers.lock().expect("lock must succeed") = extra_headers.to_vec();
+            Ok(ProviderOutcome {
+                chunks: vec!["ok".to_string()],
+                output_tokens: 1,
+                reasoning: None,
+                reasoning_details: None,
+                tool_calls: None,
+                emitted_live: false,
+            })
+        }
+
+        async fn post_responses_stream(
+            &self,
+            _request_id: &str,
+            _url: &str,
+            _payload: &Value,
+            _bearer_override: Option<&str>,
+            _extra_headers: &[(String, String)],
+            _sender: Option<&dyn ResponseEventSink>,
+        ) -> Result<ProviderOutcome, CoreError> {
+            panic!("OpenRouter client should use chat/completions transport");
+        }
+
+        async fn post_form_json(
+            &self,
+            _url: &str,
+            _form_fields: &[(String, String)],
+            _headers: &[(String, String)],
+        ) -> Result<Value, CoreError> {
+            panic!("OpenRouter client should not use form transport");
+        }
+    }
+
+    #[tokio::test]
+    async fn generate_passes_forward_headers_to_runtime() {
+        let seen_headers = Arc::new(Mutex::new(Vec::new()));
+        let runtime = Arc::new(HeaderCaptureRuntime { seen_headers: seen_headers.clone() });
+        let client = OpenRouterClient::with_runtime(runtime);
+        let input = ResponsesInput::Text("hello".to_string());
+        let forward_headers = vec![
+            ("HTTP-Referer".to_string(), "https://example.com".to_string()),
+            ("X-OpenRouter-Title".to_string(), "Example App".to_string()),
+        ];
+
+        let result = xrouter_core::ProviderClient::generate(
+            &client,
+            ProviderGenerateRequest {
+                model: "openai/gpt-5-mini",
+                instructions: None,
+                input: &input,
+                reasoning: None,
+                tools: None,
+                tool_choice: None,
+                auth_bearer: None,
+                forward_headers: &forward_headers,
+            },
+        )
+        .await;
+
+        assert!(result.is_ok());
+        assert_eq!(*seen_headers.lock().expect("lock must succeed"), forward_headers);
+    }
+
+    #[tokio::test]
+    async fn generate_stream_passes_forward_headers_to_runtime() {
+        let seen_headers = Arc::new(Mutex::new(Vec::new()));
+        let runtime = Arc::new(HeaderCaptureRuntime { seen_headers: seen_headers.clone() });
+        let client = OpenRouterClient::with_runtime(runtime);
+        let input = ResponsesInput::Text("hello".to_string());
+        let forward_headers = vec![
+            ("X-Title".to_string(), "Example App".to_string()),
+            ("X-OpenRouter-Categories".to_string(), "cli-agent".to_string()),
+        ];
+
+        let result = xrouter_core::ProviderClient::generate_stream(
+            &client,
+            ProviderGenerateStreamRequest {
+                request_id: "req_1",
+                request: ProviderGenerateRequest {
+                    model: "openai/gpt-5-mini",
+                    instructions: None,
+                    input: &input,
+                    reasoning: None,
+                    tools: None,
+                    tool_choice: None,
+                    auth_bearer: None,
+                    forward_headers: &forward_headers,
+                },
+                sender: None,
+            },
+        )
+        .await;
+
+        assert!(result.is_ok());
+        assert_eq!(*seen_headers.lock().expect("lock must succeed"), forward_headers);
+    }
+
+    #[test]
+    fn finds_forwarded_headers_case_insensitively() {
+        let headers = vec![
+            ("http-referer".to_string(), "https://example.com".to_string()),
+            ("x-title".to_string(), "Example App".to_string()),
+        ];
+
+        assert_eq!(find_forwarded_header(&headers, "HTTP-Referer"), Some("https://example.com"));
+        assert_eq!(find_forwarded_header(&headers, "X-Title"), Some("Example App"));
+        assert_eq!(find_forwarded_header(&headers, "X-OpenRouter-Categories"), None);
     }
 }

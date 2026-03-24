@@ -210,6 +210,7 @@ fn build_provider_request<'a>(request: &'a ResponsesRequest) -> ProviderGenerate
         tools: request.tools.as_deref(),
         tool_choice: request.tool_choice.as_ref(),
         auth_bearer: None,
+        forward_headers: &[],
     }
 }
 

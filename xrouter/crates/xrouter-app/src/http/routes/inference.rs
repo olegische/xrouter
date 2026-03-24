@@ -41,11 +41,13 @@ fn spawn_engine_stream(
     engine: Arc<ExecutionEngine>,
     request: ResponsesRequest,
     auth_bearer: Option<String>,
+    forward_headers: Vec<(String, String)>,
 ) -> ReceiverStream<Result<ResponseEvent, CoreError>> {
     let (tx, rx) = mpsc::channel(32);
     let sink: Arc<dyn ResponseEventSink> = Arc::new(AxumResponseEventSink { sender: tx });
     tokio::spawn(async move {
-        let _ = engine.execute_stream_to_sink(request, None, auth_bearer, sink).await;
+        let _ =
+            engine.execute_stream_to_sink(request, None, auth_bearer, forward_headers, sink).await;
     });
     ReceiverStream::new(rx)
 }
@@ -110,6 +112,7 @@ pub(crate) async fn post_responses(
     let provider = state.resolve_provider_key(&request.model);
     let provider_model = state.resolve_provider_model_id(&request.model);
     let public_model_id = synthesize_model_id(&provider, &provider_model);
+    let forward_headers = extract_forward_headers(&headers, provider.as_str());
     let auth_bearer = match resolve_byok_bearer(
         &headers,
         state.byok_enabled,
@@ -200,123 +203,122 @@ pub(crate) async fn post_responses(
             }
         });
 
-        let stream = spawn_engine_stream(engine.clone(), request, auth_bearer.clone()).flat_map(
-            move |event| {
-                let mut events = Vec::<Result<Event, Infallible>>::new();
-                if let Ok(ref mapped) = event {
-                    if let Some(request_id) = response_event_request_id(mapped) {
-                        stream_request_span.record("request.id", request_id);
-                        stream_request_span.record("response.id", request_id);
-                    }
-                    record_response_event_classification(
-                        stream_route.as_str(),
-                        stream_provider.as_str(),
-                        "responses_sse",
-                        mapped,
+        let stream = spawn_engine_stream(
+            engine.clone(),
+            request,
+            auth_bearer.clone(),
+            forward_headers.clone(),
+        )
+        .flat_map(move |event| {
+            let mut events = Vec::<Result<Event, Infallible>>::new();
+            if let Ok(ref mapped) = event {
+                if let Some(request_id) = response_event_request_id(mapped) {
+                    stream_request_span.record("request.id", request_id);
+                    stream_request_span.record("response.id", request_id);
+                }
+                record_response_event_classification(
+                    stream_route.as_str(),
+                    stream_provider.as_str(),
+                    "responses_sse",
+                    mapped,
+                );
+            }
+            match event {
+                Ok(ResponseEvent::OutputTextDelta { delta, .. }) => {
+                    events.push(Ok(Event::default().event("response.output_text.delta").data(
+                        json!({
+                            "type": "response.output_text.delta",
+                            "output_index": 0,
+                            "item_id": "msg_0",
+                            "content_index": 0,
+                            "delta": delta
+                        })
+                        .to_string(),
+                    )));
+                }
+                Ok(ResponseEvent::ReasoningDelta { delta, .. }) => {
+                    events.push(Ok(Event::default().event("response.reasoning.delta").data(
+                        json!({
+                            "type": "response.reasoning.delta",
+                            "delta": delta
+                        })
+                        .to_string(),
+                    )));
+                }
+                Ok(ResponseEvent::ResponseCompleted { output, finish_reason, usage, .. }) => {
+                    let reasoning = extract_reasoning_from_output(&output);
+                    info!(
+                        event = "http.stream.completed",
+                        route = stream_route,
+                        response_id = %response_id,
+                        provider = %stream_provider,
+                        finish_reason = %finish_reason,
+                        reasoning_present = reasoning.is_some(),
+                        reasoning_chars = reasoning.as_ref().map(|it| it.len()).unwrap_or(0),
+                        input_tokens = usage.input_tokens,
+                        output_tokens = usage.output_tokens,
+                        total_tokens = usage.total_tokens,
+                        duration_ms = started_at.elapsed().as_millis() as u64
                     );
-                }
-                match event {
-                    Ok(ResponseEvent::OutputTextDelta { delta, .. }) => {
-                        events.push(Ok(Event::default().event("response.output_text.delta").data(
+                    for (output_index, item) in output.iter().enumerate() {
+                        events.push(Ok(Event::default().event("response.output_item.done").data(
                             json!({
-                                "type": "response.output_text.delta",
-                                "output_index": 0,
-                                "item_id": "msg_0",
-                                "content_index": 0,
-                                "delta": delta
+                                "type": "response.output_item.done",
+                                "output_index": output_index,
+                                "item": item
                             })
                             .to_string(),
                         )));
                     }
-                    Ok(ResponseEvent::ReasoningDelta { delta, .. }) => {
-                        events.push(Ok(Event::default().event("response.reasoning.delta").data(
-                            json!({
-                                "type": "response.reasoning.delta",
-                                "delta": delta
-                            })
-                            .to_string(),
-                        )));
-                    }
-                    Ok(ResponseEvent::ResponseCompleted {
-                        output, finish_reason, usage, ..
-                    }) => {
-                        let reasoning = extract_reasoning_from_output(&output);
-                        info!(
-                            event = "http.stream.completed",
-                            route = stream_route,
-                            response_id = %response_id,
-                            provider = %stream_provider,
-                            finish_reason = %finish_reason,
-                            reasoning_present = reasoning.is_some(),
-                            reasoning_chars = reasoning.as_ref().map(|it| it.len()).unwrap_or(0),
-                            input_tokens = usage.input_tokens,
-                            output_tokens = usage.output_tokens,
-                            total_tokens = usage.total_tokens,
-                            duration_ms = started_at.elapsed().as_millis() as u64
-                        );
-                        for (output_index, item) in output.iter().enumerate() {
-                            events.push(Ok(Event::default()
-                                .event("response.output_item.done")
-                                .data(
-                                    json!({
-                                        "type": "response.output_item.done",
-                                        "output_index": output_index,
-                                        "item": item
-                                    })
-                                    .to_string(),
-                                )));
-                        }
-                        events.push(Ok(Event::default().event("response.completed").data(
-                            json!({
-                                "type": "response.completed",
-                                "response": {
-                                    "id": response_id,
-                                    "status": "completed",
-                                    "output": output,
-                                    "finish_reason": finish_reason,
-                                    "usage": {
-                                        "input_tokens": usage.input_tokens,
-                                        "output_tokens": usage.output_tokens,
-                                        "total_tokens": usage.total_tokens
-                                    }
+                    events.push(Ok(Event::default().event("response.completed").data(
+                        json!({
+                            "type": "response.completed",
+                            "response": {
+                                "id": response_id,
+                                "status": "completed",
+                                "output": output,
+                                "finish_reason": finish_reason,
+                                "usage": {
+                                    "input_tokens": usage.input_tokens,
+                                    "output_tokens": usage.output_tokens,
+                                    "total_tokens": usage.total_tokens
                                 }
-                            })
-                            .to_string(),
-                        )));
-                    }
-                    Ok(ResponseEvent::ResponseError { message, .. }) => {
-                        stream_request_span.set_status(Status::error(message.clone()));
-                        warn!(
-                            event = "http.stream.failed",
-                            route = stream_route,
-                            response_id = %response_id,
-                            provider = %stream_provider,
-                            duration_ms = started_at.elapsed().as_millis() as u64,
-                            error = %message
-                        );
-                        events.push(Ok(Event::default().event("response.error").data(
-                            json!({"type": "response.error", "error": message}).to_string(),
-                        )));
-                    }
-                    Err(error) => {
-                        stream_request_span.set_status(Status::error(error.to_string()));
-                        warn!(
-                            event = "http.stream.failed",
-                            route = stream_route,
-                            response_id = %response_id,
-                            provider = %stream_provider,
-                            duration_ms = started_at.elapsed().as_millis() as u64,
-                            error = %error
-                        );
-                        events.push(Ok(Event::default().event("response.error").data(
-                            json!({"type": "response.error", "error": error.to_string()})
-                                .to_string(),
-                        )));
-                    }
+                            }
+                        })
+                        .to_string(),
+                    )));
                 }
-                futures::stream::iter(events)
-            },
-        );
+                Ok(ResponseEvent::ResponseError { message, .. }) => {
+                    stream_request_span.set_status(Status::error(message.clone()));
+                    warn!(
+                        event = "http.stream.failed",
+                        route = stream_route,
+                        response_id = %response_id,
+                        provider = %stream_provider,
+                        duration_ms = started_at.elapsed().as_millis() as u64,
+                        error = %message
+                    );
+                    events.push(Ok(Event::default()
+                        .event("response.error")
+                        .data(json!({"type": "response.error", "error": message}).to_string())));
+                }
+                Err(error) => {
+                    stream_request_span.set_status(Status::error(error.to_string()));
+                    warn!(
+                        event = "http.stream.failed",
+                        route = stream_route,
+                        response_id = %response_id,
+                        provider = %stream_provider,
+                        duration_ms = started_at.elapsed().as_millis() as u64,
+                        error = %error
+                    );
+                    events.push(Ok(Event::default().event("response.error").data(
+                        json!({"type": "response.error", "error": error.to_string()}).to_string(),
+                    )));
+                }
+            }
+            futures::stream::iter(events)
+        });
 
         let bootstrap = futures::stream::iter(vec![
             Ok::<Event, Infallible>(
@@ -337,7 +339,7 @@ pub(crate) async fn post_responses(
         return Sse::new(full_stream).into_response();
     }
 
-    match run_responses_request(engine, request, auth_bearer).await {
+    match run_responses_request(engine, request, auth_bearer, forward_headers).await {
         Ok(mut resp) => {
             resp.id = ensure_id_prefix(&resp.id, "resp_");
             request_span.record("request.id", resp.id.as_str());
@@ -426,6 +428,7 @@ pub(crate) async fn post_chat_completions(
     let provider = state.resolve_provider_key(&core_request.model);
     let provider_model = state.resolve_provider_model_id(&core_request.model);
     let public_model_id = synthesize_model_id(&provider, &provider_model);
+    let forward_headers = extract_forward_headers(&headers, provider.as_str());
     let auth_bearer = match resolve_byok_bearer(
         &headers,
         state.byok_enabled,
@@ -482,7 +485,12 @@ pub(crate) async fn post_chat_completions(
         let stream_route = "/api/v1/chat/completions".to_string();
         let stream_request_span = request_span.clone();
         let stream_started_at = started_at;
-        let stream = spawn_engine_stream(engine.clone(), core_request, auth_bearer.clone()).map(
+        let stream = spawn_engine_stream(
+                engine.clone(),
+                core_request,
+                auth_bearer.clone(),
+                forward_headers.clone(),
+            ).map(
                 move |evt| {
                     if let Ok(ref mapped) = evt {
                         if let Some(request_id) = response_event_request_id(mapped) {
@@ -598,7 +606,7 @@ pub(crate) async fn post_chat_completions(
         return Sse::new(stream.chain(done)).into_response();
     }
 
-    match run_responses_request(engine, core_request, auth_bearer).await {
+    match run_responses_request(engine, core_request, auth_bearer, forward_headers).await {
         Ok(mut resp) => {
             resp.id = ensure_id_prefix(&resp.id, "resp_");
             request_span.record("request.id", resp.id.as_str());
@@ -650,8 +658,28 @@ async fn run_responses_request(
     engine: Arc<ExecutionEngine>,
     request: ResponsesRequest,
     auth_bearer: Option<String>,
+    forward_headers: Vec<(String, String)>,
 ) -> Result<ResponsesResponse, CoreError> {
-    engine.execute_with_auth(request, auth_bearer).await
+    engine.execute_with_auth(request, auth_bearer, forward_headers).await
+}
+
+fn extract_forward_headers(headers: &HeaderMap, provider: &str) -> Vec<(String, String)> {
+    if provider != "openrouter" {
+        return Vec::new();
+    }
+
+    const OPENROUTER_FORWARD_HEADERS: [&str; 4] =
+        ["HTTP-Referer", "X-OpenRouter-Title", "X-Title", "X-OpenRouter-Categories"];
+
+    OPENROUTER_FORWARD_HEADERS
+        .iter()
+        .filter_map(|name| {
+            headers
+                .get(*name)
+                .and_then(|value| value.to_str().ok())
+                .map(|value| ((*name).to_string(), value.to_string()))
+        })
+        .collect()
 }
 
 struct HeaderMapExtractor<'a>(&'a HeaderMap);

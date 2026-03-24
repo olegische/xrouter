@@ -43,6 +43,7 @@ pub struct ExecutionContext {
     pub request_tools: Option<Vec<serde_json::Value>>,
     pub request_tool_choice: Option<serde_json::Value>,
     pub auth_bearer: Option<String>,
+    pub forward_headers: Vec<(String, String)>,
     pub output_text: String,
     pub tool_calls: Option<Vec<ToolCall>>,
     pub reasoning: Option<String>,
@@ -52,7 +53,11 @@ pub struct ExecutionContext {
 }
 
 impl ExecutionContext {
-    fn new(request: ResponsesRequest, auth_bearer: Option<String>) -> Self {
+    fn new(
+        request: ResponsesRequest,
+        auth_bearer: Option<String>,
+        forward_headers: Vec<(String, String)>,
+    ) -> Self {
         let request_input = request.input.clone();
         let input = request_input.to_canonical_text();
         Self {
@@ -68,6 +73,7 @@ impl ExecutionContext {
             request_tools: request.tools,
             request_tool_choice: request.tool_choice,
             auth_bearer,
+            forward_headers,
             output_text: String::new(),
             tool_calls: None,
             reasoning: None,
@@ -390,6 +396,7 @@ pub struct ProviderGenerateRequest<'a> {
     pub tools: Option<&'a [serde_json::Value]>,
     pub tool_choice: Option<&'a serde_json::Value>,
     pub auth_bearer: Option<&'a str>,
+    pub forward_headers: &'a [(String, String)],
 }
 
 #[derive(Clone, Copy)]
@@ -496,6 +503,7 @@ impl StageHandler for GenerateHandler {
                     tools: context.request_tools.as_deref(),
                     tool_choice: context.request_tool_choice.as_ref(),
                     auth_bearer: context.auth_bearer.as_deref(),
+                    forward_headers: &context.forward_headers,
                 },
                 sender: self.sender.as_deref(),
             })
@@ -691,15 +699,16 @@ impl ExecutionEngine {
     }
 
     pub async fn execute(&self, request: ResponsesRequest) -> Result<ResponsesResponse, CoreError> {
-        self.execute_with_auth(request, None).await
+        self.execute_with_auth(request, None, Vec::new()).await
     }
 
     pub async fn execute_with_auth(
         &self,
         request: ResponsesRequest,
         auth_bearer: Option<String>,
+        forward_headers: Vec<(String, String)>,
     ) -> Result<ResponsesResponse, CoreError> {
-        self.execute_internal(request, None, None, auth_bearer).await
+        self.execute_internal(request, None, None, auth_bearer, forward_headers).await
     }
 
     pub async fn execute_with_disconnect(
@@ -707,7 +716,7 @@ impl ExecutionEngine {
         request: ResponsesRequest,
         disconnect_at: Option<StageName>,
     ) -> Result<ResponsesResponse, CoreError> {
-        self.execute_internal(request, disconnect_at, None, None).await
+        self.execute_internal(request, disconnect_at, None, None, Vec::new()).await
     }
 
     pub async fn execute_stream_to_sink(
@@ -715,6 +724,7 @@ impl ExecutionEngine {
         request: ResponsesRequest,
         disconnect_at: Option<StageName>,
         auth_bearer: Option<String>,
+        forward_headers: Vec<(String, String)>,
         sender: Arc<dyn ResponseEventSink>,
     ) -> Result<(), CoreError> {
         let execute_stream_span = info_span!(
@@ -725,7 +735,13 @@ impl ExecutionEngine {
             stream = true
         );
         let result = self
-            .execute_internal(request, disconnect_at, Some(sender.clone()), auth_bearer)
+            .execute_internal(
+                request,
+                disconnect_at,
+                Some(sender.clone()),
+                auth_bearer,
+                forward_headers,
+            )
             .instrument(execute_stream_span)
             .await;
         if let Err(error) = &result {
@@ -745,9 +761,10 @@ impl ExecutionEngine {
         disconnect_at: Option<StageName>,
         sender: Option<Arc<dyn ResponseEventSink>>,
         auth_bearer: Option<String>,
+        forward_headers: Vec<(String, String)>,
     ) -> Result<ResponsesResponse, CoreError> {
         let request_started_at = Instant::now();
-        let mut context = ExecutionContext::new(request, auth_bearer);
+        let mut context = ExecutionContext::new(request, auth_bearer, forward_headers);
         info!(
             event = "core.request.started",
             request_id = %context.request_id,
@@ -1177,6 +1194,7 @@ usage_total=3
 
     struct AuthCaptureProvider {
         seen: Arc<Mutex<Option<String>>>,
+        seen_headers: Arc<Mutex<Vec<(String, String)>>>,
     }
 
     struct CaptureSink {
@@ -1200,6 +1218,8 @@ usage_total=3
         ) -> Result<ProviderOutcome, CoreError> {
             *self.seen.lock().expect("lock must succeed") =
                 request.auth_bearer.map(ToString::to_string);
+            *self.seen_headers.lock().expect("lock must succeed") =
+                request.forward_headers.to_vec();
             Ok(ProviderOutcome {
                 chunks: vec!["ok".to_string()],
                 output_tokens: 1,
@@ -1214,7 +1234,11 @@ usage_total=3
     #[tokio::test]
     async fn execute_with_auth_passes_bearer_to_provider() {
         let seen = Arc::new(Mutex::new(None));
-        let provider = Arc::new(AuthCaptureProvider { seen: seen.clone() });
+        let seen_headers = Arc::new(Mutex::new(Vec::new()));
+        let provider = Arc::new(AuthCaptureProvider {
+            seen: seen.clone(),
+            seen_headers: seen_headers.clone(),
+        });
         let engine = ExecutionEngine::new(provider);
         let request = ResponsesRequest {
             model: "fake".to_string(),
@@ -1234,17 +1258,23 @@ usage_total=3
         };
 
         let _ = engine
-            .execute_with_auth(request, Some("byok-test-token".to_string()))
+            .execute_with_auth(request, Some("byok-test-token".to_string()), Vec::new())
             .await
             .expect("request must succeed");
 
         assert_eq!(seen.lock().expect("lock must succeed").as_deref(), Some("byok-test-token"));
+        assert!(seen_headers.lock().expect("lock must succeed").is_empty());
     }
 
     #[tokio::test]
     async fn execute_without_auth_keeps_provider_bearer_empty() {
         let seen = Arc::new(Mutex::new(Some("placeholder".to_string())));
-        let provider = Arc::new(AuthCaptureProvider { seen: seen.clone() });
+        let seen_headers =
+            Arc::new(Mutex::new(vec![("placeholder".to_string(), "value".to_string())]));
+        let provider = Arc::new(AuthCaptureProvider {
+            seen: seen.clone(),
+            seen_headers: seen_headers.clone(),
+        });
         let engine = ExecutionEngine::new(provider);
         let request = ResponsesRequest {
             model: "fake".to_string(),
@@ -1265,6 +1295,47 @@ usage_total=3
 
         let _ = engine.execute(request).await.expect("request must succeed");
         assert_eq!(seen.lock().expect("lock must succeed").as_deref(), None);
+        assert!(seen_headers.lock().expect("lock must succeed").is_empty());
+    }
+
+    #[tokio::test]
+    async fn execute_with_auth_passes_forward_headers_to_provider() {
+        let seen = Arc::new(Mutex::new(None));
+        let seen_headers = Arc::new(Mutex::new(Vec::new()));
+        let provider = Arc::new(AuthCaptureProvider {
+            seen: seen.clone(),
+            seen_headers: seen_headers.clone(),
+        });
+        let engine = ExecutionEngine::new(provider);
+        let request = ResponsesRequest {
+            model: "fake".to_string(),
+            instructions: None,
+            previous_response_id: None,
+            input: xrouter_contracts::ResponsesInput::Text("hello".to_string()),
+            parallel_tool_calls: None,
+            stream: false,
+            reasoning: None,
+            store: None,
+            include: None,
+            service_tier: None,
+            prompt_cache_key: None,
+            text: None,
+            tools: None,
+            tool_choice: None,
+        };
+
+        let forward_headers = vec![
+            ("HTTP-Referer".to_string(), "https://example.com".to_string()),
+            ("X-OpenRouter-Title".to_string(), "Example App".to_string()),
+        ];
+
+        let _ = engine
+            .execute_with_auth(request, None, forward_headers.clone())
+            .await
+            .expect("request must succeed");
+
+        assert_eq!(seen.lock().expect("lock must succeed").as_deref(), None);
+        assert_eq!(*seen_headers.lock().expect("lock must succeed"), forward_headers);
     }
 
     #[tokio::test]
@@ -1290,7 +1361,7 @@ usage_total=3
         };
 
         engine
-            .execute_stream_to_sink(request, None, None, sink)
+            .execute_stream_to_sink(request, None, None, Vec::new(), sink)
             .await
             .expect("stream request must succeed");
 
@@ -1322,7 +1393,7 @@ usage_total=3
             tool_choice: None,
         };
 
-        let result = engine.execute_stream_to_sink(request, None, None, sink).await;
+        let result = engine.execute_stream_to_sink(request, None, None, Vec::new(), sink).await;
 
         assert!(matches!(result, Err(CoreError::Provider(_))));
         let events = events.lock().expect("lock must succeed");
@@ -1353,8 +1424,9 @@ usage_total=3
             tool_choice: None,
         };
 
-        let result =
-            engine.execute_stream_to_sink(request, Some(StageName::Ingest), None, sink).await;
+        let result = engine
+            .execute_stream_to_sink(request, Some(StageName::Ingest), None, Vec::new(), sink)
+            .await;
 
         assert_eq!(result, Err(CoreError::ClientDisconnected(StageName::Ingest)));
         let events = events.lock().expect("lock must succeed");
@@ -1393,7 +1465,7 @@ usage_total=3
         };
 
         engine
-            .execute_stream_to_sink(request, Some(StageName::Generate), None, sink)
+            .execute_stream_to_sink(request, Some(StageName::Generate), None, Vec::new(), sink)
             .await
             .expect("generate disconnect must not cancel in-flight generation");
 
